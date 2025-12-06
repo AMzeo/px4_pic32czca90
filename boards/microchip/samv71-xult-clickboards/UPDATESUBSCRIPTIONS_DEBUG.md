@@ -187,6 +187,16 @@ commander arm -f            # Force arm for testing
 
 ---
 
+## Related Issues
+
+| Issue | Status | Document |
+|-------|--------|----------|
+| HITL Sensor Processing | OPEN | [HITL_SENSOR_PROCESSING_ISSUE.md](HITL_SENSOR_PROCESSING_ISSUE.md) |
+
+**Note:** After fixing updateSubscriptions(), HITL testing revealed a new issue where simulation sensor data (`sensor_baro`) is not being processed into EKF-consumable topics (`vehicle_air_data`). This prevents position estimation and causes failsafe during HITL flight attempts.
+
+---
+
 ## Document History
 
 | Date | Update |
@@ -196,6 +206,7 @@ commander arm -f            # Force arm for testing
 | 2025-12-06 | Fix #6 (runtime initialization) - SUCCESS |
 | 2025-12-06 | Removed all debug prints, cleaned up code |
 | 2025-12-06 | Final documentation and git commit |
+| 2025-12-06 | Added link to HITL sensor processing issue |
 
 ---
 
