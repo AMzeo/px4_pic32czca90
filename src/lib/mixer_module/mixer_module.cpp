@@ -42,6 +42,10 @@ using namespace time_literals;
 
 struct FunctionProvider {
 	using Constructor = FunctionProviderBase * (*)(const FunctionProviderBase::Context &context);
+
+	// Default constructor needed for runtime-initialized array
+	FunctionProvider() : min_func(OutputFunction::Disabled), max_func(OutputFunction::Disabled), constructor(nullptr) {}
+
 	FunctionProvider(OutputFunction min_func_, OutputFunction max_func_, Constructor constructor_)
 		: min_func(min_func_), max_func(max_func_), constructor(constructor_) {}
 	FunctionProvider(OutputFunction func, Constructor constructor_)
@@ -52,21 +56,32 @@ struct FunctionProvider {
 	Constructor constructor;
 };
 
-static const FunctionProvider all_function_providers[] = {
-	// Providers higher up take precedence for subscription callback in case there are multiple
-	{OutputFunction::Constant_Min, &FunctionConstantMin::allocate},
-	{OutputFunction::Constant_Max, &FunctionConstantMax::allocate},
-	{OutputFunction::Motor1, OutputFunction::MotorMax, &FunctionMotors::allocate},
-	{OutputFunction::Servo1, OutputFunction::ServoMax, &FunctionServos::allocate},
-	{OutputFunction::Peripheral_via_Actuator_Set1, OutputFunction::Peripheral_via_Actuator_Set6, &FunctionActuatorSet::allocate},
-	{OutputFunction::Landing_Gear, &FunctionLandingGear::allocate},
-	{OutputFunction::Landing_Gear_Wheel, &FunctionLandingGearWheel::allocate},
-	{OutputFunction::Parachute, &FunctionParachute::allocate},
-	{OutputFunction::Gripper, &FunctionGripper::allocate},
-	{OutputFunction::RC_Roll, OutputFunction::RC_AUXMax, &FunctionManualRC::allocate},
-	{OutputFunction::Gimbal_Roll, OutputFunction::Gimbal_Yaw, &FunctionGimbal::allocate},
-	{OutputFunction::IC_Engine_Ignition, OutputFunction::IC_Engine_Starter, &FunctionICEControl::allocate},
-};
+// Function providers array - runtime initialized to avoid SAMV7 static init issues
+static FunctionProvider all_function_providers[12];
+static bool providers_initialized = false;
+
+static void init_function_providers()
+{
+	if (providers_initialized) {
+		return;
+	}
+
+	// Providers higher up take precedence for subscription callback
+	all_function_providers[0] = FunctionProvider(OutputFunction::Constant_Min, &FunctionConstantMin::allocate);
+	all_function_providers[1] = FunctionProvider(OutputFunction::Constant_Max, &FunctionConstantMax::allocate);
+	all_function_providers[2] = FunctionProvider(OutputFunction::Motor1, OutputFunction::MotorMax, &FunctionMotors::allocate);
+	all_function_providers[3] = FunctionProvider(OutputFunction::Servo1, OutputFunction::ServoMax, &FunctionServos::allocate);
+	all_function_providers[4] = FunctionProvider(OutputFunction::Peripheral_via_Actuator_Set1, OutputFunction::Peripheral_via_Actuator_Set6, &FunctionActuatorSet::allocate);
+	all_function_providers[5] = FunctionProvider(OutputFunction::Landing_Gear, &FunctionLandingGear::allocate);
+	all_function_providers[6] = FunctionProvider(OutputFunction::Landing_Gear_Wheel, &FunctionLandingGearWheel::allocate);
+	all_function_providers[7] = FunctionProvider(OutputFunction::Parachute, &FunctionParachute::allocate);
+	all_function_providers[8] = FunctionProvider(OutputFunction::Gripper, &FunctionGripper::allocate);
+	all_function_providers[9] = FunctionProvider(OutputFunction::RC_Roll, OutputFunction::RC_AUXMax, &FunctionManualRC::allocate);
+	all_function_providers[10] = FunctionProvider(OutputFunction::Gimbal_Roll, OutputFunction::Gimbal_Yaw, &FunctionGimbal::allocate);
+	all_function_providers[11] = FunctionProvider(OutputFunction::IC_Engine_Ignition, OutputFunction::IC_Engine_Starter, &FunctionICEControl::allocate);
+
+	providers_initialized = true;
+}
 
 MixingOutput::MixingOutput(const char *param_prefix, uint8_t max_num_outputs, OutputModuleInterface &interface,
 			   SchedulingPolicy scheduling_policy, bool support_esc_calibration, bool ramp_up, const uint8_t instance_start) :
@@ -217,6 +232,10 @@ void MixingOutput::cleanupFunctions()
 
 bool MixingOutput::updateSubscriptions(bool allow_wq_switch)
 {
+	// Runtime initialize function providers (needed for SAMV7 where static init fails)
+	init_function_providers();
+
+
 	if (!_need_function_update || _armed.armed) {
 		return false;
 	}
@@ -277,7 +296,8 @@ bool MixingOutput::updateSubscriptions(bool allow_wq_switch)
 			_function_assignment[i] = OutputFunction::Disabled;
 		}
 
-		for (int p = 0; p < (int)(sizeof(all_function_providers) / sizeof(all_function_providers[0])); ++p) {
+		int num_providers = (int)(sizeof(all_function_providers) / sizeof(all_function_providers[0]));
+		for (int p = 0; p < num_providers; ++p) {
 			if (_function_assignment[i] >= all_function_providers[p].min_func &&
 			    _function_assignment[i] <= all_function_providers[p].max_func) {
 				all_disabled = false;
@@ -289,6 +309,7 @@ bool MixingOutput::updateSubscriptions(bool allow_wq_switch)
 						break;
 					}
 				}
+
 
 				if (found_index >= 0) {
 					_functions[i] = _function_allocated[found_index];

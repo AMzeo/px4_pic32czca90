@@ -615,11 +615,7 @@ void PWMSim::Run()
 
 	_mixing_output.update();
 
-	// SAMV7: Skip updateSubscriptions entirely - even with allow_wq_switch=false
-	// it causes a crash. Root cause in updateSubscriptions() needs investigation.
-#if !defined(CONFIG_ARCH_CHIP_SAMV7)
 	_mixing_output.updateSubscriptions(true);
-#endif
 
 	perf_end(_cycle_perf);
 }
@@ -699,20 +695,15 @@ PWMSim::PWMSim(bool hil_mode_enabled) :
 	_mixing_output(PARAM_PREFIX, MAX_ACTUATORS, *this, MixingOutput::SchedulingPolicy::Auto, false, false),
 	_parameter_update_sub(ORB_ID(parameter_update), 1_s)
 {
-	PX4_INFO("PWMSim MODE0: constructor entry");
-
 	/* Explicit perf counter allocation for SAMV7 compatibility */
 	_cycle_perf = perf_alloc(PC_ELAPSED, MODULE_NAME": cycle");
 	_interval_perf = perf_alloc(PC_INTERVAL, MODULE_NAME": interval");
 
-	PX4_INFO("PWMSim MODE0: calling setAll*");
 	_mixing_output.setAllDisarmedValues(PWM_SIM_DISARMED_MAGIC);
 	_mixing_output.setAllFailsafeValues(PWM_SIM_FAILSAFE_MAGIC);
 	_mixing_output.setAllMinValues(PWM_SIM_PWM_MIN_MAGIC);
 	_mixing_output.setAllMaxValues(PWM_SIM_PWM_MAX_MAGIC);
 	_mixing_output.setIgnoreLockdown(hil_mode_enabled);
-
-	PX4_INFO("PWMSim MODE0: constructor done");
 }
 
 PWMSim::~PWMSim()
@@ -721,16 +712,9 @@ PWMSim::~PWMSim()
 	perf_free(_interval_perf);
 }
 
-static int _mode0_updateOutputs_count = 0;
-
 bool PWMSim::updateOutputs(uint16_t outputs[MAX_ACTUATORS], unsigned num_outputs,
 			   unsigned num_control_groups_updated)
 {
-	if (_mode0_updateOutputs_count < 3) {
-		PX4_INFO("MODE0: updateOutputs num=%u groups=%u", num_outputs, num_control_groups_updated);
-	}
-	_mode0_updateOutputs_count++;
-
 	// Only publish once we receive actuator_controls (important for lock-step to work correctly)
 	if (num_control_groups_updated > 0) {
 		actuator_outputs_s actuator_outputs{};
@@ -769,12 +753,6 @@ bool PWMSim::updateOutputs(uint16_t outputs[MAX_ACTUATORS], unsigned num_outputs
 
 void PWMSim::Run()
 {
-	static bool first_run = true;
-	if (first_run) {
-		PX4_INFO("pwm_out_sim: Run() first call");
-		first_run = false;
-	}
-
 	if (should_exit()) {
 		ScheduleClear();
 		_mixing_output.unregister();
@@ -792,10 +770,7 @@ void PWMSim::Run()
 		updateParams();
 	}
 
-	// SAMV7: Skip updateSubscriptions entirely - causes crash even with false.
-#if !defined(CONFIG_ARCH_CHIP_SAMV7)
 	_mixing_output.updateSubscriptions(true);
-#endif
 }
 
 int PWMSim::task_spawn(int argc, char *argv[])

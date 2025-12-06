@@ -46,16 +46,10 @@
 #include <uORB/Subscription.hpp>
 #include <uORB/Publication.hpp>
 
-/* SAMV7 HITL: Use mode 5 which works around static init issues.
- * Mode 0 = Full version (crashes on SAMV7 due to BlockingList mutex issue)
- * Mode 5 = SAMV7-compatible version (skips updateSubscriptions)
- * See: boards/microchip/samv71-xult-clickboards/SAMV7_STATIC_INIT_ISSUES.md
+/* SAMV7 HITL: Now works with full mode after runtime init fix.
+ * See: boards/microchip/samv71-xult-clickboards/UPDATESUBSCRIPTIONS_DEBUG.md
  */
-#if defined(CONFIG_ARCH_CHIP_SAMV7)
-#define SAMV7_PWMSIM_TEST_MODE 5
-#else
 #define SAMV7_PWMSIM_TEST_MODE 0
-#endif
 
 #if SAMV7_PWMSIM_TEST_MODE == 0 || SAMV7_PWMSIM_TEST_MODE >= 2
 #include <lib/mixer_module/mixer_module.hpp>
