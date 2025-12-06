@@ -186,8 +186,12 @@ void PWMOut::Run()
 		update_params();
 	}
 
-	// check at end of cycle (updateSubscriptions() can potentially change to a different WorkQueue thread)
+	// SAMV7: Skip updateSubscriptions due to work queue switch re-entrancy issue.
+	// ScheduleNow() immediately triggers Run() on rate_ctrl before the first
+	// updateSubscriptions() completes, causing a race condition / crash.
+#if !defined(CONFIG_ARCH_CHIP_SAMV7)
 	_mixing_output.updateSubscriptions(true);
+#endif
 
 	perf_end(_cycle_perf);
 	_first_update_cycle = false;

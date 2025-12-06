@@ -36,9 +36,22 @@
 #include <px4_platform_common/px4_config.h>
 #include <nuttx/arch.h>
 #include <sam_tc.h>
+#include <stdint.h>
 
-/* Include hardware description for type definitions */
-#include <px4_arch/io_timer_hw_description.h>
+/* Maximum number of IO timers (one per TC channel used for PWM) */
+#ifndef MAX_IO_TIMERS
+#define MAX_IO_TIMERS  4  /* Timer1-4 for 4 PWM channels */
+#endif
+
+/* Maximum number of timer channels across all timers */
+#ifndef MAX_TIMER_IO_CHANNELS
+#define MAX_TIMER_IO_CHANNELS  4  /* 2 channels from TC0 + 2 channels from TC1 */
+#endif
+
+/* Forward declarations for types */
+typedef uint8_t io_timer_channel_mode_t;
+typedef uint16_t io_timer_channel_allocation_t;
+typedef int (*channel_handler_t)(void *context);
 
 __BEGIN_DECLS
 
@@ -103,5 +116,11 @@ __EXPORT extern const io_timers_t io_timers[MAX_IO_TIMERS];
 __EXPORT extern const timer_io_channels_t timer_io_channels[MAX_TIMER_IO_CHANNELS];
 
 __EXPORT extern uint32_t io_timer_channel_get_as_pwm_input(unsigned channel);
+
+__EXPORT extern int io_timer_unallocate_channel(unsigned channel);
+
+__EXPORT extern int io_timer_set_pwm_rate(unsigned timer, unsigned rate);
+
+__EXPORT extern void io_timer_trigger(unsigned channels_mask);
 
 __END_DECLS

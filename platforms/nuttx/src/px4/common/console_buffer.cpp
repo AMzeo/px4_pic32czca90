@@ -38,6 +38,7 @@
 #include <pthread.h>
 #include <string.h>
 #include <fcntl.h>
+#include <nuttx/irq.h>
 
 #ifdef BOARD_ENABLE_CONSOLE_BUFFER
 #ifndef BOARD_CONSOLE_BUFFER_SIZE
@@ -59,17 +60,37 @@ public:
 	int read(char *buffer, int buffer_length, int *offset);
 
 private:
-	void		lock() { do {} while (px4_sem_wait(&_lock) != 0); }
-	void		unlock() { px4_sem_post(&_lock); }
+	void		ensure_initialized()
+	{
+		if (!_initialized) {
+			irqstate_t flags = enter_critical_section();
+
+			if (!_initialized) {
+				px4_sem_init(&_lock, 0, 1);
+				_initialized = true;
+			}
+
+			leave_critical_section(flags);
+		}
+	}
+
+	void		lock()
+	{
+		ensure_initialized();
+
+		do {} while (px4_sem_wait(&_lock) != 0);
+	}
+
+	void		unlock()
+	{
+		px4_sem_post(&_lock);
+	}
 
 	char _buffer[BOARD_CONSOLE_BUFFER_SIZE];
 	int _head{0};
 	int _tail{0};
-	// NOTE: SEM_INITIALIZER works here because it's placed in .data at compile time.
-	// This file is guarded by BOARD_ENABLE_CONSOLE_BUFFER which is DISABLED for SAMV7
-	// because SEM_INITIALIZER doesn't work reliably on that platform for C++ class members.
-	// See boards/microchip/samv71-xult-clickboards/SAMV7_STATIC_INIT_EXPLAINED.md
-	px4_sem_t _lock = SEM_INITIALIZER(1);
+	volatile bool _initialized{false};
+	px4_sem_t _lock{};
 };
 
 void ConsoleBuffer::print(bool follow)

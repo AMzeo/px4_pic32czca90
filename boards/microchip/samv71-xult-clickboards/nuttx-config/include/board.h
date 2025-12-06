@@ -148,18 +148,20 @@
 #define HSMCI_INIT_CLKDIV          ((186 << HSMCI_MR_CLKDIV_SHIFT) | HSMCI_MR_CLKODD)
 
 /* MCK = 150MHz,
- * CLKDIV = 3 w/CLOCKODD,
- * MCI_SPEED = 150MHz /(2*3 + 0 + 2) = 18.75 MHz
+ * CLKDIV = 4,
+ * MCI_SPEED = 150MHz /(2*4 + 0 + 2) = 15 MHz
+ * (Reduced from 18.75MHz for stability during development)
  */
 
-#define HSMCI_MMCXFR_CLKDIV        (2 << HSMCI_MR_CLKDIV_SHIFT)
+#define HSMCI_MMCXFR_CLKDIV        (4 << HSMCI_MR_CLKDIV_SHIFT)
 
 /* MCK = 150MHz,
- * CLKDIV = 2,
- * MCI_SPEED = 150MHz /(2*2 + 0 + 2) = 25 MHz
+ * CLKDIV = 4,
+ * MCI_SPEED = 150MHz /(2*4 + 0 + 2) = 15 MHz
+ * (Reduced from 25MHz to fix SD write errors - can increase after validation)
  */
 
-#define HSMCI_SDXFR_CLKDIV         (2 << HSMCI_MR_CLKDIV_SHIFT)
+#define HSMCI_SDXFR_CLKDIV         (4 << HSMCI_MR_CLKDIV_SHIFT)
 #define HSMCI_SDWIDEXFR_CLKDIV     HSMCI_SDXFR_CLKDIV
 
 /* FLASH wait states.

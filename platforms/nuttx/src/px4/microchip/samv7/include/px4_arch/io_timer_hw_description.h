@@ -33,28 +33,128 @@
 
 #pragma once
 
-#include <px4_platform_common/px4_config.h>
-#include <sam_tc.h>
-
-/* SAMV7 IO Timer Hardware Description
- * This file defines the hardware-specific timer configuration
- * for PWM output channels on the SAMV7
+/**
+ * @file io_timer_hw_description.h
+ *
+ * SAMV7 Timer/Counter hardware description for PWM output
  */
 
-/* Maximum number of IO timers (TC peripherals) */
-#ifndef MAX_IO_TIMERS
-#define MAX_IO_TIMERS  3
-#endif
+#include <px4_arch/io_timer.h>
+#include <px4_arch/hw_description.h>
+#include <px4_platform_common/constexpr_util.h>
 
-/* Maximum number of timer channels across all timers */
-#ifndef MAX_TIMER_IO_CHANNELS
-#define MAX_TIMER_IO_CHANNELS  9  /* 3 timers × 3 channels each */
-#endif
+#define initIOTimerChannelCapture initIOTimerChannel  /* alias for param metadata generation */
 
-/* Forward declarations for types used in io_timer.h */
-typedef uint8_t io_timer_channel_mode_t;
-typedef uint16_t io_timer_channel_allocation_t;
+/**
+ * Initialize an IO timer block
+ */
+static inline constexpr io_timers_t initIOTimer(Timer::Timer timer)
+{
+	io_timers_t ret{};
 
-/* Channel handler callback type */
-typedef int (*channel_handler_t)(uint16_t channel_index, void *context, uint32_t event);
+	/* Get TC block base address based on timer number */
+	switch (timer) {
+	case Timer::Timer1:
+	case Timer::Timer2:
+		ret.base = SAM_TC012_BASE;  /* TC block 0 */
+		break;
 
+	case Timer::Timer3:
+	case Timer::Timer4:
+	case Timer::Timer5:
+		ret.base = SAM_TC345_BASE;  /* TC block 1 */
+		break;
+	}
+
+	ret.clock_register = 0;  /* Handled by io_timer_tc.c */
+	ret.clock_bit = 0;
+	ret.vectorno = 0;
+
+	return ret;
+}
+
+/**
+ * Initialize a timer channel with GPIO pin mapping
+ */
+static inline constexpr timer_io_channels_t initIOTimerChannel(const io_timers_t io_timers_conf[MAX_IO_TIMERS],
+		Timer::TimerChannel timer, GPIO::GPIOPin pin)
+{
+	timer_io_channels_t ret{};
+
+	/* Set GPIO configuration for TC output (Peripheral B for TC)
+	 * NuttX GPIO encoding for SAMV7:
+	 * - Bits 21-23: Mode (GPIO_PERIPHB = 4 << 21)
+	 * - Bits 16-20: Config (GPIO_CFG_DEFAULT = 0)
+	 * - Bits 5-7:   Port (PIOA=0, PIOB=1, PIOC=2, PIOD=3, PIOE=4)
+	 * - Bits 0-4:   Pin number (0-31)
+	 */
+	uint32_t gpio_mode = (4 << 21);  /* GPIO_PERIPHB */
+	uint32_t gpio_cfg = (0 << 16);   /* GPIO_CFG_DEFAULT */
+	uint32_t gpio_port = ((uint32_t)pin.port << 5);
+	uint32_t gpio_pin = (uint32_t)pin.pin;
+
+	ret.gpio_out = gpio_mode | gpio_cfg | gpio_port | gpio_pin;
+	ret.gpio_in = 0;
+
+	/* Find timer index and channel
+	 * timer_index must match position in io_timers[] array
+	 * timer_channel is the channel offset within the TC block for address calculation
+	 */
+	ret.timer_index = 0xff;
+
+	switch (timer.timer) {
+	case Timer::Timer1:
+		ret.timer_index = 0;    /* io_timers[0] */
+		ret.timer_channel = 1;  /* TC0 CH1 */
+		break;
+
+	case Timer::Timer2:
+		ret.timer_index = 1;    /* io_timers[1] */
+		ret.timer_channel = 2;  /* TC0 CH2 */
+		break;
+
+	case Timer::Timer3:
+		ret.timer_index = 2;    /* io_timers[2] */
+		ret.timer_channel = 0;  /* TC1 CH0 */
+		break;
+
+	case Timer::Timer4:
+		ret.timer_index = 3;    /* io_timers[3] */
+		ret.timer_channel = 1;  /* TC1 CH1 */
+		break;
+
+	case Timer::Timer5:
+		ret.timer_index = 4;    /* io_timers[4] if used */
+		ret.timer_channel = 2;  /* TC1 CH2 */
+		break;
+	}
+
+	constexpr_assert(ret.timer_index != 0xff, "Timer not found");
+
+	return ret;
+}
+
+/**
+ * Timer channel mapping initialization
+ */
+struct io_timers_channel_mapping_t {
+	uint32_t element[MAX_IO_TIMERS];
+};
+
+static inline constexpr io_timers_channel_mapping_t initIOTimerChannelMapping(const io_timers_t io_timers_conf[MAX_IO_TIMERS],
+		const timer_io_channels_t timer_io_channels_conf[MAX_TIMER_IO_CHANNELS])
+{
+	io_timers_channel_mapping_t ret{};
+
+	for (int i = 0; i < MAX_IO_TIMERS; ++i) {
+		ret.element[i] = 0;
+	}
+
+	for (int i = 0; i < MAX_TIMER_IO_CHANNELS; ++i) {
+		if (timer_io_channels_conf[i].timer_index < MAX_IO_TIMERS) {
+			ret.element[timer_io_channels_conf[i].timer_index] |= (1 << i);
+		}
+	}
+
+	return ret;
+}

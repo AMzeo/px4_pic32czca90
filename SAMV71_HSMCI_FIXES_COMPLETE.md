@@ -589,9 +589,71 @@ When porting drivers to Cortex-M7 with data cache:
 
 ---
 
+---
+
+### Bug #26: Completion Handshake Deadlock in sam_notransfer()
+
+**File:** `platforms/nuttx/NuttX/nuttx/arch/arm/src/samv7/sam_hsmci.c`
+**Line:** 1419-1465
+**Severity:** CRITICAL
+**Impact:** Sustained SD card logging fails with errno 116 (ETIMEDOUT)
+
+**Root Cause:**
+Fix #12 added an early `return` statement in `sam_notransfer()` when `dmabusy=true` to prevent touching hardware during DMA. However, this early return also prevented the software state flags (`xfrbusy`, `txbusy`) from being cleared.
+
+This created a deadlock in the dual-event completion handshake:
+
+```
+When XFRDONE fires before DMA completes:
+1. XFRDONE interrupt fires
+2. sam_endtransfer() calls sam_notransfer()
+3. sam_notransfer() sees dmabusy=true, returns early
+   → xfrbusy stays TRUE (never cleared!)
+4. sam_endtransfer() checks !dmabusy - FALSE, no wake-up
+5. DMA callback fires, sets dmabusy=false
+6. sam_dmacallback() checks !xfrbusy - FALSE, no wake-up
+7. Neither path wakes semaphore
+8. Watchdog fires after 5 seconds → ETIMEDOUT (errno 116)
+```
+
+**Symptoms:**
+- Manual SD card operations work (timing different)
+- Sustained logging (logger start) times out with errno 116
+- Power cycle required to recover
+
+**Fix Applied:**
+```c
+// BEFORE (Bug):
+if (priv->dmabusy)
+  {
+    mcerr("INFO: sam_notransfer called while DMA active - skipping (safe)\n");
+    return;  // <-- Early return: xfrbusy NEVER cleared!
+  }
+// ... xfrbusy = false; txbusy = false; (never reached)
+
+// AFTER (Fixed):
+if (priv->dmabusy)
+  {
+    mcinfo("INFO: sam_notransfer called while DMA active - clearing flags only\n");
+  }
+// No early return - fall through to ALWAYS clear flags:
+priv->xfrbusy = false;
+priv->txbusy  = false;
+```
+
+**Discovery Method:**
+- Deep analysis comparing FreeRTOS mcid_dma.c (polling-based, single completion) vs NuttX (interrupt-driven, dual-event semaphore)
+- Traced the completion handshake between sam_endtransfer() and sam_dmacallback()
+- Identified the race condition where XFRDONE wins but xfrbusy stays true
+
+**Related Files:**
+- See `SAMV71_ROOT_CAUSE_ANALYSIS.md` for full analysis comparing Claude and Gemini analyses
+
+---
+
 ## Conclusion
 
-All 7 critical bugs in the SAMV71 HSMCI driver have been identified and fixed:
+All critical bugs in the SAMV71 HSMCI driver have been identified and fixed:
 
 1. ✓ Missing D-cache invalidation
 2. ✓ Premature BLKR clearing
@@ -600,18 +662,21 @@ All 7 critical bugs in the SAMV71 HSMCI driver have been identified and fixed:
 5. ✓ Reading cleared BLKR in TX DMA
 6. ✓ BLKR hardware register fields swapped
 7. ✓ Wrong cache operation in XDMAC
+...
+26. ✓ **Completion handshake deadlock (NEW - Dec 2025)**
 
 The fixes address:
 - Cache coherency for Cortex-M7 data cache
 - Register value persistence and single-source-of-truth
 - Hardware register definition accuracy
 - Generic DMA driver cache operation correctness
+- **Completion handshake race condition for sustained operations**
 
-**Next Step:** User testing of firmware with all 7 fixes applied (build timestamp: Nov 22, 2025 13:38).
+**Next Step:** Rebuild firmware and test sustained logging with `logger start`.
 
 ---
 
-**Document Version:** 1.0
-**Last Updated:** November 22, 2025
+**Document Version:** 1.1
+**Last Updated:** December 3, 2025
 **Author:** Claude Code (Anthropic AI)
 **Reviewed By:** Awaiting user verification

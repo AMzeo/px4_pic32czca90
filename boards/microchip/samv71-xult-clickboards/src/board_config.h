@@ -105,10 +105,28 @@
 /* PWM Timer Configuration ***********************************************************************************/
 
 /* SAMV71-XULT PWM Configuration using TC (Timer/Counter):
- * TC0 - 6 PWM channels for motor outputs
+ * TC0 CH0 (TC0) - Reserved for HRT
+ * TC0 CH1 (TC1) - PWM1: PA15 (TIOA1)
+ * TC0 CH2 (TC2) - RESERVED: PA26 conflicts with HSMCI DA2 (SD card data line 2)
+ * TC1 CH0 (TC3) - PWM2: PC23 (TIOA3)
+ * TC1 CH1 (TC4) - PWM3: PC26 (TIOA4)
+ * TC1 CH2 (TC5) - Reserved for RC Input capture: PC29 (TIOA5)
+ *
+ * NOTE: TC0 CH2 (PA26) cannot be used for PWM because PA26 is the HSMCI0 DA2
+ *       data line required for 4-bit SD card mode. Using PA26 for PWM would
+ *       corrupt SD card writes (bits 2 and 6 are carried on D2).
  */
 
-#define DIRECT_PWM_OUTPUT_CHANNELS  6
+#define DIRECT_PWM_OUTPUT_CHANNELS  3
+
+/* PWM Output GPIO Definitions - TC TIOA outputs for PWM */
+#define GPIO_PWM1_OUT    (GPIO_PERIPHB | GPIO_CFG_DEFAULT | GPIO_PORT_PIOA | GPIO_PIN15)  /* TC1 TIOA - PA15 */
+/* GPIO_PWM2_OUT (PA26) REMOVED - conflicts with HSMCI0 DA2 (SD card data line 2) */
+#define GPIO_PWM2_OUT    (GPIO_PERIPHB | GPIO_CFG_DEFAULT | GPIO_PORT_PIOC | GPIO_PIN23)  /* TC3 TIOA - PC23 */
+#define GPIO_PWM3_OUT    (GPIO_PERIPHB | GPIO_CFG_DEFAULT | GPIO_PORT_PIOC | GPIO_PIN26)  /* TC4 TIOA - PC26 */
+
+/* RC Input capture - TC5 (TC1 CH2) - Reserved for future use */
+#define GPIO_RC_INPUT    (GPIO_PERIPHB | GPIO_CFG_DEFAULT | GPIO_PORT_PIOC | GPIO_PIN29)  /* TC5 TIOA - PC29 */
 
 /* High-resolution timer */
 #define HRT_TIMER               0  /* use TC0 channel 0 for the HRT */
@@ -143,13 +161,16 @@
 		GPIO_nLED_BLUE,           \
 		GPIO_SPI0_CS_ICM20689,    \
 		GPIO_SPI0_DRDY_ICM20689,  \
+		GPIO_PWM1_OUT,            \
+		GPIO_PWM2_OUT,            \
+		GPIO_PWM3_OUT,            \
 	}
 
-// Console buffer - DISABLED for SAMV7: global static object constructor runs before
-// NuttX semaphore system is ready. px4_sem_init() cannot be called during C++ static init.
-// Needs lazy initialization approach to work on SAMV7.
-// #define BOARD_ENABLE_CONSOLE_BUFFER
+// Console buffer - ENABLED: lazy initialization implemented in console_buffer.cpp
+// (ensure_initialized() with double-checked locking avoids static init issues)
+#define BOARD_ENABLE_CONSOLE_BUFFER
 
+/* Number of IO timers used for PWM (one timer per PWM channel) */
 #define BOARD_NUM_IO_TIMERS 3
 
 __BEGIN_DECLS

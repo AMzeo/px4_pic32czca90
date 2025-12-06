@@ -17,9 +17,9 @@ CONFIG_BOARD_SERIAL_RC="/dev/ttyS4"
 # USB CDC/ACM
 CONFIG_DRIVERS_CDCACM_AUTOSTART=y  # RE-ENABLED - dataman_client issue resolved
 
-# ESC/Motor Outputs - Disabled (requires timer/DShot implementation)
+# ESC/Motor Outputs
 # CONFIG_DRIVERS_DSHOT is not set
-# CONFIG_DRIVERS_PWM_OUT is not set
+CONFIG_DRIVERS_PWM_OUT=y
 
 # HITL Simulation Support
 CONFIG_MODULES_SIMULATION_PWM_OUT_SIM=y
@@ -90,7 +90,7 @@ CONFIG_MODULES_SENSORS=y
 CONFIG_SYSTEMCMDS_BSONDUMP=y
 CONFIG_SYSTEMCMDS_LITTLEFS_MOUNT=y
 CONFIG_SYSTEMCMDS_MFT=y
-# CONFIG_SYSTEMCMDS_DMESG is not set  # Hangs due to console buffer bug - not HRT related
+CONFIG_SYSTEMCMDS_DMESG=y  # Re-enabled: lazy init fix in console_buffer.cpp
 # CONFIG_SYSTEMCMDS_HARDFAULT_LOG is not set  # Requires HAS_PROGMEM infrastructure (not yet implemented for SAMV7)
 CONFIG_SYSTEMCMDS_TESTS=y
 CONFIG_SYSTEMCMDS_PARAM=y
@@ -101,3 +101,6 @@ CONFIG_SYSTEMCMDS_TUNE_CONTROL=y
 
 # Board-specific test commands
 CONFIG_BOARD_PCK6_TEST=y  # PCK6 1MHz timer test (TC1)
+
+# Work Queue Stack Sizes - increased for SAMV7
+CONFIG_WQ_HP_DEFAULT_STACKSIZE=4096

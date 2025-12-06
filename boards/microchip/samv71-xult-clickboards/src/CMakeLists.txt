@@ -34,6 +34,7 @@
 add_library(drivers_board
 	i2c.cpp
 	init.c
+	sam_mpuinit.c
 	led.c
 	sam_gpiosetevent.c
 	sam_hsmci.c

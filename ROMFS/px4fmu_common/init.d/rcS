@@ -71,23 +71,22 @@ then
 
 	if [ $STORAGE_AVAILABLE = no -o $SDCARD_FORMAT = yes ]
 	then
-		echo "INFO [init] formatting /dev/mmcsd0"
-		set STARTUP_TUNE 15 # tune 15 = SD_ERROR (overridden to SD_INIT if format + mount succeeds)
-
-		if mkfatfs -F 32 /dev/mmcsd0
-		then
-			echo "INFO [init] card formatted"
-
-			if mount -t vfat /dev/mmcsd0 /fs/microsd
-			then
-				set STORAGE_AVAILABLE yes
-				set STARTUP_TUNE 14 # tune 14 = SD_INIT
-			else
-				echo "ERROR [init] card mount failed"
-			fi
-		else
-			echo "ERROR [init] format failed"
-		fi
+		echo "WARN [init] SD card mount failed - SKIPPING auto-format for driver testing"
+		echo "WARN [init] Please format SD card externally and reboot"
+		# TEMPORARILY DISABLED for driver testing:
+		# if mkfatfs -F 32 /dev/mmcsd0
+		# then
+		#	echo "INFO [init] card formatted"
+		#	if mount -t vfat /dev/mmcsd0 /fs/microsd
+		#	then
+		#		set STORAGE_AVAILABLE yes
+		#		set STARTUP_TUNE 14 # tune 14 = SD_INIT
+		#	else
+		#		echo "ERROR [init] card mount failed"
+		#	fi
+		# else
+		#	echo "ERROR [init] format failed"
+		# fi
 	fi
 else
 	# Is there a device mounted for storage

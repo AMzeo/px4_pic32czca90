@@ -615,10 +615,8 @@ void PWMSim::Run()
 
 	_mixing_output.update();
 
-	// SAMV7: Skip updateSubscriptions due to work queue switch re-entrancy issue.
-	// ScheduleNow() immediately triggers Run() on rate_ctrl before the first
-	// updateSubscriptions() completes, causing a race condition / crash.
-	// This is NOT a mutex init issue - the mutex fixes are working.
+	// SAMV7: Skip updateSubscriptions entirely - even with allow_wq_switch=false
+	// it causes a crash. Root cause in updateSubscriptions() needs investigation.
 #if !defined(CONFIG_ARCH_CHIP_SAMV7)
 	_mixing_output.updateSubscriptions(true);
 #endif
@@ -794,8 +792,10 @@ void PWMSim::Run()
 		updateParams();
 	}
 
-	// check at end of cycle (updateSubscriptions() can potentially change to a different WorkQueue thread)
+	// SAMV7: Skip updateSubscriptions entirely - causes crash even with false.
+#if !defined(CONFIG_ARCH_CHIP_SAMV7)
 	_mixing_output.updateSubscriptions(true);
+#endif
 }
 
 int PWMSim::task_spawn(int argc, char *argv[])

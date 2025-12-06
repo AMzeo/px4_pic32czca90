@@ -10,8 +10,7 @@
  *    notice, this list of conditions and the following disclaimer.
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in
- *    the distribution and/or other materials provided with the
- *    distribution.
+ *    the distribution.
  * 3. Neither the name PX4 nor the names of its contributors may be
  *    used to endorse or promote products derived from this software
  *    without specific prior written permission.
@@ -34,33 +33,49 @@
 /**
  * @file timer_config.cpp
  *
- * Configuration data for the SAMV71 PWM servo driver.
+ * Configuration data for the SAMV71 PWM driver using TC (Timer/Counter).
  *
- * SAMV71-XULT PWM Output Configuration using TC (Timer/Counter)
- * TC0 provides PWM channels for motor outputs
+ * SAMV71-XULT PWM Output Configuration:
+ *   TC0 CH0 (TC0) - Reserved for HRT
+ *   TC0 CH1 (TC1) - PWM1: PA15 (TIOA1)
+ *   TC0 CH2 (TC2) - RESERVED: PA26 conflicts with HSMCI DA2 (SD card D2)
+ *   TC1 CH0 (TC3) - PWM2: PC23 (TIOA3)
+ *   TC1 CH1 (TC4) - PWM3: PC26 (TIOA4)
+ *   TC1 CH2 (TC5) - Reserved for RC Input capture: PC29 (TIOA5)
  *
- * IMPORTANT: This is a STUB configuration that allows compilation but
- * PWM outputs will NOT function until proper hardware pin mappings are added.
- *
- * TODO: Map TC0 timer channels to specific GPIO pins based on actual
- * hardware connections on your SAMV71-XULT board.
+ * NOTE: TC0 CH2 (PA26) cannot be used for PWM because PA26 is the HSMCI0 DA2
+ *       data line required for 4-bit SD card mode. Using PA26 for PWM would
+ *       corrupt SD card writes (bits 2 and 6 are carried on D2).
  */
 
 #include <px4_arch/io_timer_hw_description.h>
-#include <px4_arch/io_timer.h>
 
-/* STUB Timer Configuration
- * This configuration compiles but does not provide functional PWM
- * Real implementation requires:
- * 1. Determining which TC channels are wired to accessible pins
- * 2. Configuring GPIO alternate functions for TC outputs
- * 3. Setting up proper timer parameters
+/**
+ * Timer block configuration
+ *
+ * Each timer represents a TC channel:
+ * Timer1 = TC0 CH1 (TC block 0)
+ * Timer3 = TC1 CH0, Timer4 = TC1 CH1 (TC block 1)
+ * Note: Timer2 (TC0 CH2, PA26) NOT USED - conflicts with SD card
  */
-
-// Empty timer configuration - allows compilation
-// PWM functionality requires proper timer setup
-constexpr io_timers_t io_timers[MAX_IO_TIMERS] = {
+const io_timers_t io_timers[MAX_IO_TIMERS] = {
+	initIOTimer(Timer::Timer1),  /* TC block 0 - CH1 */
+	initIOTimer(Timer::Timer3),  /* TC block 1 - CH0 */
+	initIOTimer(Timer::Timer4),  /* TC block 1 - CH1 */
 };
 
-constexpr timer_io_channels_t timer_io_channels[MAX_TIMER_IO_CHANNELS] = {
+/**
+ * Timer channel to GPIO pin mapping
+ *
+ * Channel 0: Timer1 (TC0 CH1) -> PA15 (TIOA1)
+ * Channel 1: Timer3 (TC1 CH0) -> PC23 (TIOA3)
+ * Channel 2: Timer4 (TC1 CH1) -> PC26 (TIOA4)
+ */
+const timer_io_channels_t timer_io_channels[MAX_TIMER_IO_CHANNELS] = {
+	initIOTimerChannel(io_timers, {Timer::Timer1, Timer::Channel1}, {GPIO::PortA, GPIO::Pin15}),
+	initIOTimerChannel(io_timers, {Timer::Timer3, Timer::Channel1}, {GPIO::PortC, GPIO::Pin23}),
+	initIOTimerChannel(io_timers, {Timer::Timer4, Timer::Channel1}, {GPIO::PortC, GPIO::Pin26}),
 };
+
+const io_timers_channel_mapping_t io_timers_channel_mapping =
+	initIOTimerChannelMapping(io_timers, timer_io_channels);

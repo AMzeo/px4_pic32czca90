@@ -40,7 +40,8 @@
 MEMORY
 {
   flash (rx)  : ORIGIN = 0x00400000, LENGTH = 2048K
-  sram (rwx)  : ORIGIN = 0x20400000, LENGTH = 384K
+  sram (rwx)  : ORIGIN = 0x20400000, LENGTH = 320K
+  nocache (rwx) : ORIGIN = 0x20450000, LENGTH = 64K
 }
 
 OUTPUT_ARCH(arm)
@@ -108,6 +109,14 @@ SECTIONS
         . = ALIGN(4);
         _ebss = ABSOLUTE(.);
     } > sram
+
+    .nocache (NOLOAD) : {
+        . = ALIGN(32);
+        _s_nocache = ABSOLUTE(.);
+        *(.nocache .nocache.*)
+        . = ALIGN(32);
+        _e_nocache = ABSOLUTE(.);
+    } > nocache
 
     /* Stabs debugging sections */
     .stab 0 : { *(.stab) }
