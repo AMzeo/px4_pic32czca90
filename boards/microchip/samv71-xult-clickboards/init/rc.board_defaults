@@ -1,9 +1,8 @@
 #!/bin/sh
 # board defaults
 # MAVLink enabled on USB CDC/ACM (ttyACM0)
-# TEST: Using real quad airframe (4001) to test if MC modules work
-# HIL airframe (1001) was causing continuous resets
-param set SYS_AUTOSTART 4001
+# Default airframe: Generic Quad (4001), can be changed to HIL (1001) via param save
+param set-default SYS_AUTOSTART 4001
 param set-default SYS_USB_AUTO 2
 param set-default USB_MAV_MODE 0
 param set-default MAV_0_CONFIG 101

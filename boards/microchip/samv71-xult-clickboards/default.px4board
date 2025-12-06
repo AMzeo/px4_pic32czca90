@@ -60,6 +60,8 @@ CONFIG_MODULES_FLIGHT_MODE_MANAGER=y
 CONFIG_MODULES_FLIGHT_MODE_MANAGER_TASKS_AUTO_FOLLOW_TARGET=y
 CONFIG_MODULES_LAND_DETECTOR=y
 CONFIG_MODULES_LOGGER=y
+# Increased from default 3700 to fix "low on stack" warnings
+CONFIG_LOGGER_STACK_SIZE=4500
 CONFIG_MODULES_MANUAL_CONTROL=y
 CONFIG_MODULES_MAVLINK=y
 
@@ -68,6 +70,7 @@ CONFIG_MODULES_MC_ATT_CONTROL=y
 CONFIG_MODULES_MC_POS_CONTROL=y
 CONFIG_MODULES_MC_RATE_CONTROL=y
 CONFIG_MODULES_MC_HOVER_THRUST_ESTIMATOR=y  # Better hover performance
+CONFIG_MODULES_MC_AUTOTUNE_ATTITUDE_CONTROL=y  # Auto-tuning for stability
 
 # Calibration & Estimation
 CONFIG_MODULES_GYRO_CALIBRATION=y
@@ -98,6 +101,19 @@ CONFIG_SYSTEMCMDS_TOP=y
 CONFIG_SYSTEMCMDS_VER=y
 CONFIG_SYSTEMCMDS_NSHTERM=y
 CONFIG_SYSTEMCMDS_TUNE_CONTROL=y
+
+# Additional System Commands (HIGH PRIORITY - added for debugging)
+CONFIG_SYSTEMCMDS_TOPIC_LISTENER=y    # listener command - debug uORB messages
+CONFIG_SYSTEMCMDS_PERF=y              # perf command - performance profiling
+CONFIG_SYSTEMCMDS_UORB=y              # uorb command - queue monitoring
+CONFIG_SYSTEMCMDS_ACTUATOR_TEST=y     # actuator_test - test motors before flight
+CONFIG_SYSTEMCMDS_REBOOT=y            # reboot command
+# CONFIG_SYSTEMCMDS_GPIO is not set   # Requires STM32-specific GPIO definitions
+CONFIG_SYSTEMCMDS_I2CDETECT=y         # i2cdetect - I2C troubleshooting
+CONFIG_SYSTEMCMDS_LED_CONTROL=y       # led_control - LED status
+CONFIG_SYSTEMCMDS_WORK_QUEUE=y        # work_queue - debug work queues
+CONFIG_SYSTEMCMDS_SYSTEM_TIME=y       # system_time - time sync debugging
+CONFIG_SYSTEMCMDS_MTD=y               # mtd - flash/storage management
 
 # Board-specific test commands
 CONFIG_BOARD_PCK6_TEST=y  # PCK6 1MHz timer test (TC1)
