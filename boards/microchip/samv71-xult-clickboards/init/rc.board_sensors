@@ -21,8 +21,7 @@
 icm20689 -s -b 0 start
 
 # ICM-45686 IMU - 6DOF IMU 27 Click (MIKROE-6514)
-# Uncomment when using this Click board instead of ICM-20689
-# icm45686 -s -b 0 start
+icm45686 -s -b 0 start
 
 #
 # I2C Sensors (on I2C0 / TWIHS0)
@@ -38,13 +37,11 @@ dps310 -I -b 0 start
 
 # BMP388 Barometer - Pressure 5 Click (MIKROE-3566)
 # I2C address 0x76 (or 0x77 depending on SDO pin)
-# Uncomment when using this Click board
-# bmp388 -I -b 0 start
+bmp388 -I -b 0 start
 
 # BMM150 Magnetometer - GeoMagnetic Click (MIKROE-2935)
 # I2C address 0x10 (or 0x11/0x12/0x13 depending on CSB/SDO pins)
-# Uncomment when using this Click board
-# bmm150 -I -b 0 start
+bmm150 -I -b 0 start
 
 #
 # 13DOF Click (MIKROE-3775) - I2C only
@@ -54,8 +51,9 @@ dps310 -I -b 0 start
 
 # BMI088 IMU from 13DOF Click
 # I2C addresses: Accel=0x18/0x19, Gyro=0x68/0x69
-# Uncomment when using 13DOF Click
-# bmi088_i2c -b 0 start
+# Must start accel and gyro separately with -A/-G and -X (external I2C)
+bmi088_i2c -A -X -b 0 start
+bmi088_i2c -G -X -b 0 start
 
 # BMM150 Magnetometer from 13DOF Click (same as GeoMagnetic Click)
 # Already covered above if enabled
