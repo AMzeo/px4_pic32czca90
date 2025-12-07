@@ -394,13 +394,26 @@ listener vehicle_local_position
 
 ---
 
+## Reference Implementations
+
+### TII PolarFire Icicle (Microchip RISC-V)
+- **Repository:** https://github.com/tiiuae/px4-firmware
+- **Local Clone:** `/media/bhanu1234/Development/PX4-PolarFire-Icicle/`
+- **Analysis:** `PX4-PolarFire-Icicle/POLARFIRE_ICICLE_ANALYSIS.md`
+- **Key Learnings:** ADC, MTD/EEPROM, DShot, Bootloader, Safety Switch
+
+Use this as reference for implementing missing features in SAMV7.
+
+---
+
 ## Document History
 
 | Date | Update |
 |------|--------|
 | 2025-12-06 | Initial production readiness assessment |
+| 2025-12-07 | Added TII PolarFire reference implementation |
 
 ---
 
-**Last Updated:** 2025-12-06
+**Last Updated:** 2025-12-07
 **Author:** Claude Code (comprehensive analysis)
