@@ -74,7 +74,8 @@ enum class Register : uint8_t {
 
 	ST2   = 0x18, // Status 2
 
-	CNTL2 = 0x31, // Control 2
+	CNTL1 = 0x30, // Control 1 (AK09915 uses this for mode)
+	CNTL2 = 0x31, // Control 2 (AK09916/AK09918 uses this for mode)
 	CNTL3 = 0x32, // Control 3
 };
 

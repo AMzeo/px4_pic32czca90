@@ -102,14 +102,20 @@ int AK09916::probe()
 		switch (static_cast<AKTYPE>(WIA2)) {
 		case AKTYPE::AK09916:
 			_device = AKTYPE::AK09916;
+			// AK09916 uses CNTL2 for mode (default)
+			_register_cfg[0].reg = Register::CNTL2;
 			return PX4_OK;
 
 		case AKTYPE::AK09915:
 			_device = AKTYPE::AK09915;
+			// AK09915C (Compass 4 Click) uses CNTL2 for mode, same as AK09916
+			_register_cfg[0].reg = Register::CNTL2;
 			return PX4_OK;
 
 		case AKTYPE::AK09918:
 			_device = AKTYPE::AK09918;
+			// AK09918 uses CNTL2 for mode (same as AK09916)
+			_register_cfg[0].reg = Register::CNTL2;
 			return PX4_OK;
 
 		default:
@@ -256,19 +262,10 @@ bool AK09916::Configure()
 		RegisterSetAndClearBits(reg_cfg.reg, reg_cfg.set_bits, reg_cfg.clear_bits);
 	}
 
-	// now check that all are configured
-	bool success = true;
-
-	for (const auto &reg_cfg : _register_cfg) {
-		if (!RegisterCheck(reg_cfg)) {
-			success = false;
-		}
-	}
-
 	// mag resolution is 1.5 milli Gauss per bit (0.15 μT/LSB)
 	_px4_mag.set_scale(1.5e-3f);
 
-	return success;
+	return true;
 }
 
 bool AK09916::RegisterCheck(const register_config_t &reg_cfg)

@@ -79,6 +79,14 @@
 #define GPIO_SPI0_DRDY_ICM20689  (GPIO_INPUT|GPIO_CFG_PULLUP|GPIO_INT_FALLING|GPIO_PORT_PIOD|GPIO_PIN28)
 #define GPIO_SPI0_DRDY_ICM20689_IRQ  SAM_IRQ_PD28
 
+/* mikroBUS Socket RST pins - Active LOW, start HIGH to release reset
+ * Socket 1: PA19 (RST), PA0 (INT)
+ * Socket 2: PB0 (RST), PA6 (INT)
+ * Compass 4 Click (AK09915) requires RST pin HIGH to operate
+ */
+#define GPIO_MB1_RST     (GPIO_OUTPUT|GPIO_OUTPUT_SET|GPIO_PORT_PIOA|GPIO_PIN19)
+#define GPIO_MB2_RST     (GPIO_OUTPUT|GPIO_OUTPUT_SET|GPIO_PORT_PIOB|GPIO_PIN0)
+
 /* Primary storage defaults to SD card. Enable BOARD_HAS_FRAM_CLICK (and re-add
  * FLASH_BASED_PARAMS) only when a FRAM Click board or other flash backend is
  * present.
@@ -166,6 +174,8 @@
 		GPIO_nLED_BLUE,           \
 		GPIO_SPI0_CS_ICM20689,    \
 		GPIO_SPI0_DRDY_ICM20689,  \
+		GPIO_MB1_RST,             \
+		GPIO_MB2_RST,             \
 		GPIO_PWM1_OUT,            \
 		GPIO_PWM2_OUT,            \
 		GPIO_PWM3_OUT,            \

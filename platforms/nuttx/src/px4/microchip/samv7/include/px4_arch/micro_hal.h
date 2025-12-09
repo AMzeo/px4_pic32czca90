@@ -91,10 +91,10 @@ __BEGIN_DECLS
  */
 #define px4_savepanic(fileno, context, length)  (0)
 
-#define PX4_BUS_OFFSET       0                  /* SAMV7 buses are 1 based no adjustment needed */
-#define px4_spibus_initialize(bus_num_1based)   sam_spibus_initialize(bus_num_1based)
+#define PX4_BUS_OFFSET       1                  /* PX4 uses 1-based, NuttX SAMV7 uses 0-based */
+#define px4_spibus_initialize(bus_num_1based)   sam_spibus_initialize((bus_num_1based) - 1)
 
-#define px4_i2cbus_initialize(bus_num_1based)   sam_i2cbus_initialize(bus_num_1based)
+#define px4_i2cbus_initialize(bus_num_1based)   sam_i2cbus_initialize((bus_num_1based) - 1)
 #define px4_i2cbus_uninitialize(pdev)           sam_i2cbus_uninitialize(pdev)
 
 #define px4_arch_configgpio(pinset)             sam_configgpio(pinset)

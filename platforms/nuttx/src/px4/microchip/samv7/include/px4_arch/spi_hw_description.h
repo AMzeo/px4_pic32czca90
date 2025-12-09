@@ -66,8 +66,8 @@ enum Pin {
 namespace SPI
 {
 enum class Bus {
-	SPI0 = 0,
-	SPI1 = 1,
+	SPI0 = 1,  // PX4 uses 1-based, NuttX SAMV7 uses 0-based (converted in micro_hal.h)
+	SPI1 = 2,
 };
 
 struct CS {
