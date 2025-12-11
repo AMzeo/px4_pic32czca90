@@ -79,6 +79,12 @@
 #define GPIO_SPI0_DRDY_ICM20689  (GPIO_INPUT|GPIO_CFG_PULLUP|GPIO_INT_FALLING|GPIO_PORT_PIOD|GPIO_PIN28)
 #define GPIO_SPI0_DRDY_ICM20689_IRQ  SAM_IRQ_PD28
 
+/* BMP388 Pressure sensor on EXT1 header via mikroBUS adapter
+ * Uses same CS pin as ICM20689 (PD25) - same physical slot
+ * BMP388 does not use DRDY, uses polling mode
+ */
+#define GPIO_SPI0_CS_BMP388      (GPIO_OUTPUT|GPIO_OUTPUT_SET|GPIO_PORT_PIOD|GPIO_PIN25)
+
 /* mikroBUS Socket RST pins - Active LOW, start HIGH to release reset
  * Socket 1: PA19 (RST), PA0 (INT)
  * Socket 2: PB0 (RST), PA6 (INT)
