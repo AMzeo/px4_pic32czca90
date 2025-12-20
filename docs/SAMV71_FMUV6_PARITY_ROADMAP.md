@@ -4,6 +4,8 @@
 
 **Target:** Production-ready flight controller (not dev kit)
 
+**Companion execution tracker:** `docs/SAMV71_FMUV6_PARITY_EXECUTION_PLAN.md`
+
 ---
 
 ## Executive Summary
