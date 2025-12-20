@@ -46,7 +46,7 @@ This document tracks concrete acceptance criteria for each workstream. Each item
 | # | Acceptance Criteria | Test Method | Status |
 |---|---------------------|-------------|--------|
 | 1 | `px4_arch_gpiosetevent()` attaches callback internally | Code review | ⬜ |
-| 2 | Handler receives `arg` parameter correctly | On-target selftest (GPIO toggle) | ⬜ |
+| 2 | Handler receives `arg` parameter correctly | On-target selftest: toggle PD28 (EXT1 DRDY), verify with scope/LA | ⬜ |
 | 3 | ICM20689 runs at 8kHz with DRDY interrupt | `uorb top` or `icm20689 status` | ⬜ |
 | 4 | Multiple DRDY interrupts work simultaneously | Multi-sensor test | ⬜ |
 | 5 | No polling required for sensor reads | Code review + timing | ⬜ |
@@ -286,9 +286,9 @@ This document tracks concrete acceptance criteria for each workstream. Each item
 
 ```bash
 # Sensor tests
-icm20689 start -s              # Start IMU
-bmp388 start -s                # Start barometer
-ak09916 start -I               # Start magnetometer (internal I2C)
+icm20689 start -s              # Start IMU (uses board SPI config)
+bmp388 start -s -b 1           # Start barometer on SPI bus 1
+ak09916 start -I -b 1          # Start magnetometer on internal I2C bus 1 (TWIHS0)
 
 # Verify sensors publishing
 listener sensor_accel          # Check IMU accel data
@@ -320,6 +320,6 @@ free                          # Memory usage
 
 ---
 
-*Document Version: 1.1*
+*Document Version: 1.2*
 *Created: December 2024*
-*Updated: December 2024 - Fixed test methods per Codex review*
+*Updated: December 2024 - Fixed test methods and bus specs per Codex review*
