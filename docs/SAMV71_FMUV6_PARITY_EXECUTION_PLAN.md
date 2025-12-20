@@ -33,7 +33,7 @@ This document tracks concrete acceptance criteria for each workstream. Each item
 | 1 | Pinmux document with no conflicts | Schematic review | ⬜ |
 | 2 | All sensor CS lines on dedicated pins | Schematic review | ⬜ |
 | 3 | All DRDY lines on IRQ-capable GPIOs | Schematic review | ⬜ |
-| 4 | HSMCI pins free of TC conflicts | Schematic review | ✅ |
+| 4 | HSMCI pins free of TC conflicts | Schematic review | ✅ (devkit) |
 | 5 | CAN transceiver connections verified | Schematic review | ⬜ |
 
 ---
@@ -46,8 +46,8 @@ This document tracks concrete acceptance criteria for each workstream. Each item
 | # | Acceptance Criteria | Test Method | Status |
 |---|---------------------|-------------|--------|
 | 1 | `px4_arch_gpiosetevent()` attaches callback internally | Code review | ⬜ |
-| 2 | Handler receives `arg` parameter correctly | Unit test | ⬜ |
-| 3 | ICM20689 runs at 8kHz with DRDY interrupt | `listener sensor_accel` shows 8kHz | ⬜ |
+| 2 | Handler receives `arg` parameter correctly | On-target selftest (GPIO toggle) | ⬜ |
+| 3 | ICM20689 runs at 8kHz with DRDY interrupt | `uorb top` or `icm20689 status` | ⬜ |
 | 4 | Multiple DRDY interrupts work simultaneously | Multi-sensor test | ⬜ |
 | 5 | No polling required for sensor reads | Code review + timing | ⬜ |
 | 6 | Card detect interrupt works for SD | Hot-plug test | ⬜ |
@@ -89,7 +89,7 @@ This document tracks concrete acceptance criteria for each workstream. Each item
 
 | # | Acceptance Criteria | Test Method | Status |
 |---|---------------------|-------------|--------|
-| 1 | PWM output on 4+ channels | Oscilloscope | ⬜ |
+| 1 | PWM output on 3 channels (devkit) / 4+ (production) | Oscilloscope | ⬜ |
 | 2 | PWM frequency configurable 50-400Hz | Oscilloscope | ⬜ |
 | 3 | Mixer outputs drive motors correctly | Motor spin test | ⬜ |
 | 4 | Disarm sets outputs to safe state | Oscilloscope | ⬜ |
@@ -288,13 +288,14 @@ This document tracks concrete acceptance criteria for each workstream. Each item
 # Sensor tests
 icm20689 start -s              # Start IMU
 bmp388 start -s                # Start barometer
-ak09916 -I start               # Start magnetometer
+ak09916 start -I               # Start magnetometer (internal I2C)
 
-# Verify sensors
-listener sensor_accel          # Check IMU accel
-listener sensor_gyro           # Check IMU gyro
-listener sensor_baro           # Check barometer
-listener sensor_mag            # Check magnetometer
+# Verify sensors publishing
+listener sensor_accel          # Check IMU accel data
+listener sensor_gyro           # Check IMU gyro data
+listener sensor_baro           # Check barometer data
+listener sensor_mag            # Check magnetometer data
+uorb top                       # Check topic rates (preferred for rate verification)
 
 # PWM test
 pwm_out start                  # Start PWM driver
@@ -319,5 +320,6 @@ free                          # Memory usage
 
 ---
 
-*Document Version: 1.0*
+*Document Version: 1.1*
 *Created: December 2024*
+*Updated: December 2024 - Fixed test methods per Codex review*
