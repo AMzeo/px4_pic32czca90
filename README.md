@@ -13,9 +13,11 @@ This branch contains PX4 Autopilot ported to Microchip SAMV71-XULT development b
 | SPI Bus | ✅ Working |
 | I2C Bus | ✅ Working |
 | PWM Output | ✅ Working (3 channels) |
+| USB CDC-ACM | ✅ Working |
+| MAVLink | ✅ Working |
+| VBUS Detection | 🔄 Stubbed (always present) |
 | BMP388 Barometer | 🔄 In Progress |
 | AK09915 Magnetometer | 🔄 Configured |
-| USB | 🔄 Basic (VBUS stubbed) |
 | DShot | ⬜ Not Started |
 | CAN/UAVCAN | ⬜ Not Started |
 
