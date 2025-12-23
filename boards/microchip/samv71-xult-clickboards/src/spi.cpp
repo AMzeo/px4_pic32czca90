@@ -37,6 +37,7 @@
 #include <px4_platform_common/spi.h>
 #include <drivers/drv_sensor.h>
 #include <nuttx/spi/spi.h>
+#include <px4_platform_common/log.h>
 
 static constexpr px4_spi_bus_device_t make_spidev(uint32_t drvtype, uint32_t cs_gpio,
 		spi_drdy_gpio_t drdy_gpio = 0)
@@ -77,8 +78,12 @@ static void sam_spixselect(SPI::Bus bus_id, uint32_t devid, bool selected)
 				continue;
 			}
 
-			const bool device_selected = (device.devid == devid) ? selected : false;
-			px4_arch_gpiowrite(device.cs_gpio, !device_selected);
+			// Only toggle CS for the matching device to avoid overwriting
+			// the CS state when multiple devices share the same CS pin
+			if (device.devid == devid) {
+				px4_arch_gpiowrite(device.cs_gpio, !selected);
+				return;  // Found our device, done
+			}
 		}
 	}
 }
