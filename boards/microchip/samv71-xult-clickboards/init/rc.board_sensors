@@ -17,11 +17,11 @@
 #
 
 # ICM-20689 IMU - 6DOF IMU 6 Click (MIKROE-4044)
-# SPI bus 0, CS=PA11, DRDY=PA12
-icm20689 -s -b 0 start
+# SPI bus 1 (PX4 numbering), CS=PD25, DRDY=PD28
+icm20689 start -s
 
 # ICM-45686 IMU - 6DOF IMU 27 Click (MIKROE-6514)
-icm45686 -s -b 0 start
+icm45686 start -s
 
 #
 # I2C Sensors (on I2C0 / TWIHS0)
@@ -29,19 +29,19 @@ icm45686 -s -b 0 start
 
 # AK09916 Magnetometer - Compass 4 Click (MIKROE-4231)
 # I2C address 0x0C (AK09916 driver compatible with AK09915)
-ak09916 -I -b 0 start
+ak09916 start -I -b 1
 
 # DPS310 Barometer - Pressure 3 Click (MIKROE-2293)
 # I2C address 0x77
-dps310 -I -b 0 start
+dps310 start -I -b 1
 
 # BMP388 Barometer - Pressure 5 Click (MIKROE-3566)
 # I2C address 0x76 (or 0x77 depending on SDO pin)
-bmp388 -I -b 0 start
+bmp388 start -I -b 1
 
 # BMM150 Magnetometer - GeoMagnetic Click (MIKROE-2935)
 # I2C address 0x10 (or 0x11/0x12/0x13 depending on CSB/SDO pins)
-bmm150 -I -b 0 start
+bmm150 start -I -b 1
 
 #
 # 13DOF Click (MIKROE-3775) - I2C only
@@ -51,9 +51,9 @@ bmm150 -I -b 0 start
 
 # BMI088 IMU from 13DOF Click
 # I2C addresses: Accel=0x18/0x19, Gyro=0x68/0x69
-# Must start accel and gyro separately with -A/-G and -X (external I2C)
-bmi088_i2c -A -X -b 0 start
-bmi088_i2c -G -X -b 0 start
+# Must start accel and gyro separately with -A/-G and -I (internal I2C)
+bmi088_i2c start -A -I -b 1
+bmi088_i2c start -G -I -b 1
 
 # BMM150 Magnetometer from 13DOF Click (same as GeoMagnetic Click)
 # Already covered above if enabled
