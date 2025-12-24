@@ -38,6 +38,7 @@
  */
 
 #include <drivers/device/spi.h>
+#include <cstring>
 
 #include "bmp388.h"
 
@@ -49,11 +50,13 @@
 #pragma pack(push,1)
 struct spi_data_s {
 	uint8_t addr;
+	uint8_t dummy;  // BMP388 SPI requires dummy byte after address
 	struct data_s data;
 };
 
 struct spi_calibration_s {
 	uint8_t addr;
+	uint8_t dummy;  // BMP388 SPI requires dummy byte after address
 	struct calibration_s cal;
 };
 #pragma pack(pop)
@@ -97,11 +100,14 @@ int BMP388_SPI::init()
 
 int BMP388_SPI::get_reg(uint8_t addr, uint8_t *value)
 {
-	uint8_t cmd[2] = { (uint8_t)(addr | DIR_READ), 0}; //set MSB bit
-	int ret = transfer(&cmd[0], &cmd[0], 2);
+	// BMP388 SPI read protocol requires a dummy byte after address:
+	// TX: [addr|0x80, dummy, dummy]
+	// RX: [don't care, don't care, data]
+	uint8_t cmd[3] = { (uint8_t)(addr | DIR_READ), 0, 0};
+	int ret = transfer(&cmd[0], &cmd[0], 3);
 
 	if (ret == OK) {
-		*value = cmd[1];
+		*value = cmd[2];  // Data is in 3rd byte (after dummy)
 	}
 
 	return ret;
@@ -109,8 +115,26 @@ int BMP388_SPI::get_reg(uint8_t addr, uint8_t *value)
 
 int BMP388_SPI::get_reg_buf(uint8_t addr, uint8_t *buf, uint8_t len)
 {
-	uint8_t cmd[1] = {(uint8_t)(addr | DIR_READ)};
-	return transfer(&cmd[0], buf, len);
+	// BMP388 SPI read protocol requires a dummy byte after address:
+	// TX: [addr|0x80, dummy, dummy, ...]
+	// RX: [don't care, don't care, data0, data1, ...]
+	if (len == 0) {
+		return OK;
+	}
+
+	uint8_t tx[256] {};
+	uint8_t rx[256] {};
+	tx[0] = (uint8_t)(addr | DIR_READ);
+
+	// +2 for address byte and dummy byte
+	const size_t transfer_len = static_cast<size_t>(len) + 2;
+	const int ret = transfer(tx, rx, transfer_len);
+
+	if (ret == OK) {
+		memcpy(buf, &rx[2], len);  // Data starts at byte 2 (after dummy)
+	}
+
+	return ret;
 }
 
 int BMP388_SPI::set_reg(uint8_t value, uint8_t addr)
@@ -122,6 +146,7 @@ int BMP388_SPI::set_reg(uint8_t value, uint8_t addr)
 calibration_s *BMP388_SPI::get_calibration(uint8_t addr)
 {
 	_cal.addr = addr | DIR_READ;
+	_cal.dummy = 0;
 
 	if (transfer((uint8_t *)&_cal, (uint8_t *)&_cal, sizeof(struct spi_calibration_s)) == OK) {
 		return &(_cal.cal);

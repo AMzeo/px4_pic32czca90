@@ -79,19 +79,23 @@
 #define GPIO_SPI0_DRDY_ICM20689  (GPIO_INPUT|GPIO_CFG_PULLUP|GPIO_INT_FALLING|GPIO_PORT_PIOD|GPIO_PIN28)
 #define GPIO_SPI0_DRDY_ICM20689_IRQ  SAM_IRQ_PD28
 
-/* BMP388 Pressure sensor on EXT1 header via mikroBUS adapter
- * Uses same CS pin as ICM20689 (PD25) - same physical slot
+/* BMP388 Pressure sensor on EXT2 header via mikroBUS adapter
+ * EXT2 Pin 15 = CS  = PD27
  * BMP388 does not use DRDY, uses polling mode
  */
-#define GPIO_SPI0_CS_BMP388      (GPIO_OUTPUT|GPIO_OUTPUT_SET|GPIO_PORT_PIOD|GPIO_PIN25)
+#define GPIO_SPI0_CS_BMP388      (GPIO_OUTPUT|GPIO_OUTPUT_SET|GPIO_PORT_PIOD|GPIO_PIN27)
 
 /* mikroBUS Socket RST pins - Active LOW, start HIGH to release reset
  * Socket 1: PA19 (RST), PA0 (INT)
  * Socket 2: PB0 (RST), PA6 (INT)
+ * EXT1 adapter: PA5 (RST) - for Xplained Pro extension reset line (EXT1 pin 10)
+ * EXT2 adapter: PA24 (RST) - for Xplained Pro extension reset line (EXT2 pin 10)
  * Compass 4 Click (AK09915) requires RST pin HIGH to operate
  */
 #define GPIO_MB1_RST     (GPIO_OUTPUT|GPIO_OUTPUT_SET|GPIO_PORT_PIOA|GPIO_PIN19)
 #define GPIO_MB2_RST     (GPIO_OUTPUT|GPIO_OUTPUT_SET|GPIO_PORT_PIOB|GPIO_PIN0)
+#define GPIO_EXT1_RST    (GPIO_OUTPUT|GPIO_OUTPUT_SET|GPIO_PORT_PIOA|GPIO_PIN5)
+#define GPIO_EXT2_RST    (GPIO_OUTPUT|GPIO_OUTPUT_SET|GPIO_PORT_PIOA|GPIO_PIN24)
 
 /* Primary storage defaults to SD card. Enable BOARD_HAS_FRAM_CLICK (and re-add
  * FLASH_BASED_PARAMS) only when a FRAM Click board or other flash backend is
@@ -180,8 +184,11 @@
 		GPIO_nLED_BLUE,           \
 		GPIO_SPI0_CS_ICM20689,    \
 		GPIO_SPI0_DRDY_ICM20689,  \
+		GPIO_SPI0_CS_BMP388,      \
 		GPIO_MB1_RST,             \
 		GPIO_MB2_RST,             \
+		GPIO_EXT1_RST,            \
+		GPIO_EXT2_RST,            \
 		GPIO_PWM1_OUT,            \
 		GPIO_PWM2_OUT,            \
 		GPIO_PWM3_OUT,            \

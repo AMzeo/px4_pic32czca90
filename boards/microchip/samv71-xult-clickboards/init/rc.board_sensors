@@ -7,7 +7,7 @@
 #   - MIKROE-6514: 6DOF IMU 27 Click (ICM-45686) - SPI
 #   - MIKROE-4231: Compass 4 Click (AK09915) - I2C
 #   - MIKROE-2293: Pressure 3 Click (DPS310) - I2C
-#   - MIKROE-3566: Pressure 5 Click (BMP388) - I2C
+#   - MIKROE-3566: Pressure 5 Click (BMP388) - SPI
 #   - MIKROE-2935: GeoMagnetic Click (BMM150) - I2C
 #   - MIKROE-3775: 13DOF Click (BMI088 + BMM150) - I2C only
 #------------------------------------------------------------------------------
@@ -36,8 +36,8 @@ ak09916 start -I -b 1
 dps310 start -I -b 1
 
 # BMP388 Barometer - Pressure 5 Click (MIKROE-3566)
-# I2C address 0x76 (or 0x77 depending on SDO pin)
-bmp388 start -I -b 1
+# SPI on EXT2 header, CS=PD27
+bmp388 start -s
 
 # BMM150 Magnetometer - GeoMagnetic Click (MIKROE-2935)
 # I2C address 0x10 (or 0x11/0x12/0x13 depending on CSB/SDO pins)
