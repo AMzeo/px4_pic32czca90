@@ -42,7 +42,8 @@ This document consolidates all documentation created during the SAMV71-XULT PX4 
 
 ### What Works
 
-- SD Card DMA (21 fixes applied)
+- SD Card DMA (21 fixes + Fix #46 PA26 conflict - TX DMA enabled)
+- SD Card Logger (ready to enable: `SDLOG_MODE=0`)
 - Parameter storage (lazy allocation fix)
 - HRT timer (7 bugs fixed, production-ready)
 - I2C sensors (DPS310 baro, AK09916 mag)
@@ -91,7 +92,7 @@ This document consolidates all documentation created during the SAMV71-XULT PX4 
 | dmesg Command | ❌ DISABLED | Depends on console buffer |
 | Hardfault Log | ❌ DISABLED | Needs progmem fix |
 | MAVLink | ⚠️ DISABLED FOR DEBUG | Can be re-enabled |
-| Logger | ⚠️ DISABLED FOR DEBUG | Can be re-enabled |
+| Logger | ✅ READY | TX DMA fixed (Fix #46); enable via `SDLOG_MODE=0` |
 
 ---
 
