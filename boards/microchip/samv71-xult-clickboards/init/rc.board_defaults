@@ -32,3 +32,12 @@ param set-default HIL_ACT_FUNC4 104
 
 # Note: MAV_PARAM_RATE doesn't exist in this PX4 version
 # Parameter streaming rate is controlled per-instance via MAV_x_RATE
+
+# GPS Configuration
+# GPS on UART2 = /dev/ttyS2 (J505 pins 5/6: PD15/PD16)
+param set-default GPS_1_CONFIG 201
+param set-default SER_GPS1_BAUD 57600
+
+# RC Input Configuration
+# RC on UART4 = /dev/ttyS3 (J505 pin 3: PD18)
+param set-default RC_PORT_CONFIG 301
