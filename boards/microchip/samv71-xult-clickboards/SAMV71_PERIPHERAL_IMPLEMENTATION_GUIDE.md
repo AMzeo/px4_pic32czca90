@@ -1,11 +1,22 @@
-# SAMV7 ADC and Safety IO Implementation Plan
+# SAMV71 Peripheral Implementation Guide
 
 ## Executive Summary
 
-This document details the implementation plan for ADC (battery monitoring) and Safety IO
-(arm/disarm button, LED, nARMED signal) on the SAMV71-XULT board for PX4.
+This document details the implementation of key peripherals on the SAMV71-XULT board for PX4:
 
-**Primary Blocker**: No SAMV7 ADC architecture layer exists in PX4. This must be created first.
+1. **ADC** - Battery voltage/current monitoring via AFEC0
+2. **Safety IO** - Arm/disarm button, LED, and nARMED signal
+3. **GPS** - UART2 serial interface for GPS modules
+4. **RC Input** - UART4 serial interface for RC receivers
+
+**Status Summary:**
+| Peripheral | Status | Notes |
+|------------|--------|-------|
+| ADC | ✅ Working | Channels 0, 7, 11 tested |
+| Safety Button | ⚠️ Partial | SW0 blocked by EDBG, use external switch |
+| Safety LED | ✅ Working | LED0 (PC9) blinking |
+| GPS | ✅ Configured | UART2 on /dev/ttyS2 |
+| RC Input | ✅ Configured | UART4 on /dev/ttyS3 |
 
 ---
 
@@ -571,28 +582,7 @@ conv_time = (prescaler * 23 * 1000000 * multiplier) / clock_hz
 
 ---
 
----
-
-## 11. Revision History
-
-| Date | Change |
-|------|--------|
-| 2026-01-23 | Initial plan created |
-| 2026-01-23 | Validated against Microchip Harmony CSP (IBCTL, PGA corrections) |
-| 2026-01-23 | Added explicit GPIO pin config for ADC (sam_configgpio calls) |
-| 2026-01-23 | Clarified: CONFIG_ADC NOT required (direct register bypass) |
-| 2026-01-23 | Fixed GPIO_nARMED_INIT to be OUTPUT (not INPUT) |
-| 2026-01-23 | Fixed BOARD_INDICATE_EXTERNAL_LOCKOUT_STATE to use gpiowrite (not mode toggle) |
-| 2026-01-23 | Fixed: Use GPIO_nARMED (not GPIO_nARMED_INIT) in runtime macros |
-| 2026-01-23 | Fixed: Resolved defconfig guidance inconsistency (no changes needed) |
-| 2026-01-23 | Fixed: ADC test command is `board_adc test` (not `adc test`) |
-| 2026-01-23 | Fixed: Disabled PGA for battery monitoring (prevents signal distortion) |
-| 2026-01-23 | Clarified: SafetyButton.cpp modification is REQUIRED (not optional) |
-| 2026-01-23 | Added: LED polarity verification steps |
-
----
-
-## 12. Implementation Results & Testing (2026-01-23)
+## 11. Implementation Results & Testing (2026-01-23)
 
 ### 12.1 Files Created/Modified
 
@@ -908,11 +898,375 @@ git reset --hard pre-adc-safety-impl
 
 ---
 
-## 11. Revision History
+---
+
+# Part B: GPS and RC Input Configuration
+
+---
+
+## 16. Serial Port Mapping
+
+| Device | NuttX Peripheral | Physical Pins | Function | Baud Rate |
+|--------|------------------|---------------|----------|-----------|
+| `/dev/ttyS0` | UART0 | PB0 (RX), PB1 (TX) | Available | 115200 |
+| `/dev/ttyS1` | USART1 | PA21 (RX), PB04 (TX) | Console/VCOM | 115200 |
+| `/dev/ttyS2` | UART2 | PD15 (RX), PD16 (TX) | **GPS** | 57600 |
+| `/dev/ttyS3` | UART4 | PD18 (RX), PD19 (TX) | **RC Input** | 115200 |
+| `/dev/ttyACM0` | USB CDC | USB connector | MAVLink | - |
+
+**IMPORTANT:** UART4 appears as `ttyS3` (not `ttyS4`) because NuttX numbers ports sequentially.
+
+---
+
+## 17. GPS Configuration
+
+### 17.1 Quick Start (5 minutes)
+
+```bash
+1. Wire GPS module:
+   - GPS TX  → J505 Pin 5 (PD15)
+   - GPS RX  → J505 Pin 6 (PD16)
+   - GPS VCC → 3.3V
+   - GPS GND → GND
+
+2. Power on board, connect via USB serial console
+
+3. Test:
+   nsh> gps start -d /dev/ttyS2 -b 57600
+   nsh> listener sensor_gps
+
+4. Success = lat/lon values appear, fix_type >= 3
+```
+
+### 17.2 Physical Pin Locations (J505 Connector)
+
+```
+SAMV71-XULT Board - J505 Connector (Arduino Communications)
+┌─────────────────────────────────────┐
+│  Pin 1: NC                          │
+│  Pin 2: NC                          │
+│  Pin 3: PD18 (UART4 RX) ← RC INPUT  │
+│  Pin 4: PD19 (UART4 TX)             │
+│  Pin 5: PD15 (UART2 RX) ← GPS TX    │
+│  Pin 6: PD16 (UART2 TX) → GPS RX    │
+│  Pin 7: PB0  (UART0 RX)             │
+│  Pin 8: PB1  (UART0 TX)             │
+│  GND:   Multiple ground pins        │
+│  VCC:   3.3V and 5V available       │
+└─────────────────────────────────────┘
+```
+
+### 17.3 GPS Wiring Diagram
+
+**Supported GPS Modules:** u-blox NEO-M8N, NEO-M9N, BN-220, or similar NMEA/UBX GPS
+
+| GPS Module Pin | Connect To | SAMV71 Pin |
+|----------------|------------|------------|
+| TX | J505 Pin 5 | PD15 (UART2 RX) |
+| RX | J505 Pin 6 | PD16 (UART2 TX) |
+| VCC | 3.3V or 5V | Board power |
+| GND | GND | Board ground |
+
+```
+GPS Module                    SAMV71-XULT (J505)
+┌──────────┐                  ┌──────────┐
+│  TX  ●───┼──────────────────┼─● Pin 5  │ (PD15 UART2 RX)
+│  RX  ●───┼──────────────────┼─● Pin 6  │ (PD16 UART2 TX)
+│  VCC ●───┼──────────────────┼─● 3.3V   │
+│  GND ●───┼──────────────────┼─● GND    │
+└──────────┘                  └──────────┘
+```
+
+### 17.4 GPS Parameters
+
+```bash
+# Enable GPS on ttyS2
+param set GPS_1_CONFIG 201
+
+# Set GPS baud rate (57600 for most u-blox modules)
+param set SER_GPS1_BAUD 57600
+
+# Optional: Set GPS protocol (0=Auto, 1=u-blox, 2=MTK, 5=NMEA)
+param set GPS_1_PROTOCOL 1
+
+# Save parameters
+param save
+```
+
+### 17.5 GPS Testing Commands
+
+```bash
+# Check GPS driver status
+gps status
+
+# Manual start if not running
+gps start -d /dev/ttyS2 -b 57600
+
+# View raw serial data (Ctrl+C to stop)
+cat /dev/ttyS2
+
+# Monitor GPS topic
+listener sensor_gps
+
+# Monitor processed position
+listener vehicle_gps_position
+```
+
+**fix_type values:**
+- 0 = No fix
+- 1 = Dead reckoning
+- 2 = 2D fix
+- 3 = 3D fix (required for flight)
+- 4 = GNSS + dead reckoning
+- 5 = Time only
+
+---
+
+## 18. RC Input Configuration
+
+### 18.1 Quick Start (5 minutes)
+
+```bash
+1. Wire RC receiver:
+   - RC Signal → J505 Pin 3 (PD18)
+   - RC VCC    → 5V
+   - RC GND    → GND
+
+   NOTE: SBUS needs signal inverter! Use CRSF/DSM to avoid this.
+
+2. Power on transmitter, bind receiver
+
+3. Test:
+   nsh> rc_input start -d /dev/ttyS3
+   nsh> listener input_rc
+
+4. Success = channel values change when moving sticks (1000-2000 range)
+```
+
+### 18.2 RC Wiring Diagram
+
+**Supported Protocols:** SBUS (inverted), CRSF, DSM/DSM2/DSMX, SUMD
+
+| RC Receiver Pin | Connect To | SAMV71 Pin |
+|-----------------|------------|------------|
+| Signal/TX | J505 Pin 3 | PD18 (UART4 RX) |
+| VCC | 5V | Board power |
+| GND | GND | Board ground |
+
+```
+RC Receiver                   SAMV71-XULT (J505)
+┌──────────┐                  ┌──────────┐
+│ Signal●──┼──────────────────┼─● Pin 3  │ (PD18 UART4 RX)
+│  VCC ●───┼──────────────────┼─● 5V     │
+│  GND ●───┼──────────────────┼─● GND    │
+└──────────┘                  └──────────┘
+```
+
+**SBUS Note:** SBUS signal is inverted. You need an inverter circuit OR use a receiver with uninverted output (CRSF, DSM).
+
+### 18.3 SBUS Inverter Circuit (If Needed)
+
+```
+SBUS Signal ───┬───[10kΩ]───► 3.3V
+               │
+               └───[NPN BC547]───► To PD18 (Pin 3)
+                      │
+                     GND
+
+Or use dedicated SBUS inverter IC (e.g., 74HC04)
+```
+
+**Alternative:** Use receivers with uninverted output:
+- FrSky with "SBUS Out" option
+- TBS Crossfire (CRSF protocol - no inversion needed)
+- Spektrum (DSM protocol - no inversion needed)
+
+### 18.4 RC Parameters
+
+```bash
+# Enable RC input on ttyS3
+param set RC_PORT_CONFIG 300
+
+# Save parameters
+param save
+```
+
+### 18.5 RC Testing Commands
+
+```bash
+# Check RC driver status
+rc_input status
+
+# Manual start if not running
+rc_input start -d /dev/ttyS3
+
+# Monitor RC channels
+listener input_rc
+
+# Monitor processed control input
+listener manual_control_setpoint
+```
+
+**Channel values:**
+- ~1000 = Low/Left
+- ~1500 = Center
+- ~2000 = High/Right
+
+---
+
+## 19. GPS/RC Troubleshooting
+
+### 19.1 GPS Issues
+
+| Problem | Possible Cause | Solution |
+|---------|----------------|----------|
+| No `/dev/ttyS2` | UART2 not enabled | Add `CONFIG_SAMV7_UART2=y` to defconfig |
+| No data from GPS | TX/RX swapped | Swap wires on pins 5/6 |
+| No data from GPS | Wrong baud rate | Try 9600, 38400, 115200 |
+| `gps status` not running | GPS_1_CONFIG not set | `param set GPS_1_CONFIG 201` |
+| No satellite fix | Indoor/no antenna | Move outdoors, check antenna |
+| NMEA but no PX4 data | Wrong protocol | `param set GPS_1_PROTOCOL 0` (auto) |
+
+### 19.2 RC Input Issues
+
+| Problem | Possible Cause | Solution |
+|---------|----------------|----------|
+| No `/dev/ttyS3` | UART4 not enabled | Add `CONFIG_SAMV7_UART4=y` to defconfig |
+| No RC data | SBUS not inverted | Add inverter circuit |
+| No RC data | Wrong pin | Verify Pin 3 (PD18) connection |
+| `rc_input status` not running | RC_PORT_CONFIG not set | `param set RC_PORT_CONFIG 300` |
+| rc_lost: true | Transmitter off/binding | Power on TX, check binding |
+| Values stuck at 1500 | No signal variation | Move sticks, check TX batteries |
+
+---
+
+## 20. Parameter Reference Summary
+
+### GPS Parameters
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| `GPS_1_CONFIG` | 201 | Serial port (201 = GPS1 = /dev/ttyS2) |
+| `SER_GPS1_BAUD` | 57600 | Baud rate (0=auto, or specific rate) |
+| `GPS_1_PROTOCOL` | 0 | Protocol (0=auto, 1=UBX, 2=MTK, 5=NMEA) |
+
+### RC Parameters
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| `RC_PORT_CONFIG` | 300 | Serial port (300 = RC = /dev/ttyS3) |
+| `SER_RC_BAUD` | 0 | Baud rate (0=auto for most protocols) |
+
+### Serial Port Mapping (This Board)
+| Parameter Value | Port Name | Device | Physical Pins |
+|-----------------|-----------|--------|---------------|
+| 101 | TELEM1 | /dev/ttyACM0 | USB |
+| 102 | TELEM2 | /dev/ttyS1 | PA21/PB04 |
+| 201 | GPS1 | /dev/ttyS2 | PD15/PD16 |
+| 300 | RC | /dev/ttyS3 | PD18/PD19 |
+
+---
+
+## 21. Hardware Recommendations
+
+### Tested GPS Modules
+- u-blox NEO-M8N (recommended)
+- u-blox NEO-M9N
+- Beitian BN-220
+
+### Tested RC Systems
+- FrSky X8R (SBUS - needs inverter)
+- TBS Crossfire Nano (CRSF - no inverter needed)
+- Spektrum DSMX (DSM - no inverter needed)
+
+---
+
+## 22. Quick Reference Commands
+
+```bash
+# === ADC ===
+board_adc status              # Check ADC driver
+listener adc_report -n 1      # Monitor ADC values
+listener battery_status -n 1  # Monitor battery
+
+# === Safety ===
+safety_button status          # Check safety driver
+listener vehicle_status -n 1  # Check safety_off state
+
+# === GPS ===
+gps status                    # Check GPS driver
+gps start -d /dev/ttyS2       # Manual start
+listener sensor_gps           # Monitor GPS data
+listener vehicle_gps_position # Monitor position
+
+# === RC ===
+rc_input status               # Check RC driver
+rc_input start -d /dev/ttyS3  # Manual start
+listener input_rc             # Monitor RC channels
+listener manual_control_setpoint  # Monitor control input
+
+# === Parameters ===
+param show GPS_1_CONFIG       # Check GPS config
+param show RC_PORT_CONFIG     # Check RC config
+param set GPS_1_CONFIG 201    # Set GPS to ttyS2
+param set RC_PORT_CONFIG 300  # Set RC to ttyS3
+param save                    # Save to SD card
+
+# === Debug ===
+ls /dev/tty*                  # List serial devices
+cat /dev/ttyS2                # Raw GPS data
+dmesg | grep -i gps           # GPS debug messages
+dmesg | grep -i rc            # RC debug messages
+uorb status                   # List all topics
+```
+
+---
+
+## 23. Test Report Template
+
+```
+=== SAMV71 Peripheral Test Report ===
+Date: _______________
+Tester: _______________
+Board Serial: _______________
+Firmware Commit: _______________
+
+ADC:
+  Result: [ ] PASS  [ ] FAIL  [ ] NOT TESTED
+  CH0 (Voltage): _______ raw
+  CH7 (Current): _______ raw
+  CH11 (Temp):   _______ raw
+  Notes: _______________
+
+SAFETY BUTTON:
+  Result: [ ] PASS  [ ] FAIL  [ ] NOT TESTED
+  Button Used: [ ] SW0 (PA9)  [ ] External on PA0  [ ] Other: ____
+  LED Blinking: [ ] Yes  [ ] No
+  Notes: _______________
+
+GPS MODULE:
+  Model: _______________
+  Result: [ ] PASS  [ ] FAIL  [ ] NOT TESTED
+  fix_type achieved: _______
+  Notes: _______________
+
+RC RECEIVER:
+  Model: _______________
+  Protocol: [ ] SBUS  [ ] CRSF  [ ] DSM  [ ] Other: ____
+  Inverter Used: [ ] Yes  [ ] No
+  Result: [ ] PASS  [ ] FAIL  [ ] NOT TESTED
+  Notes: _______________
+
+ISSUES ENCOUNTERED:
+  _______________
+  _______________
+```
+
+---
+
+## 24. Revision History
 
 | Date | Change |
 |------|--------|
-| 2026-01-23 | Initial plan created |
+| 2026-01-23 | Initial ADC/Safety plan created |
 | 2026-01-23 | Validated against Microchip Harmony CSP (IBCTL, PGA corrections) |
 | 2026-01-23 | Added explicit GPIO pin config for ADC (sam_configgpio calls) |
 | 2026-01-23 | Clarified: CONFIG_ADC NOT required (direct register bypass) |
@@ -927,9 +1281,11 @@ git reset --hard pre-adc-safety-impl
 | 2026-01-23 | **IMPLEMENTED**: ADC driver, Safety GPIO, SafetyButton.cpp modification |
 | 2026-01-23 | **TESTED**: ADC working ✅, Safety button detected but SW0 blocked by EDBG ⚠️ |
 | 2026-01-23 | **DOCUMENTED**: Test results, SW0 issue root cause, alternative GPIO options |
+| 2026-01-23 | **MERGED**: GPS and RC Input documentation into single comprehensive guide |
 
 ---
 
 *Document created: 2026-01-23*
+*Last updated: 2026-01-23*
 *Target board: SAMV71-XULT with Click sensor boards*
 *PX4 version: Custom branch (samv7-custom)*
