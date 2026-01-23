@@ -103,16 +103,52 @@
  */
 // #define FLASH_BASED_PARAMS
 
-/* ADC Channels ***********************************************************************************/
+/* ADC Configuration ***********************************************************************************/
 
-/* ADC is not yet configured for SAMV71-XULT
- * Define placeholder channels to allow battery_status module to compile
- * These will need to be properly configured once ADC hardware mapping is done
+/* SAMV7 AFEC0 Base Address for PX4 ADC driver */
+#define BOARD_ADC_BASE          SAM_AFEC0_BASE  /* 0x4003c000 */
+
+/* ADC Reference Voltage (VDDANA = 3.3V on SAMV71-XULT) */
+#define BOARD_ADC_POS_REF_V     3.3f
+
+/* Battery monitoring channels on AFEC0:
+ * - Channel 0 (PD30): Battery Voltage
+ * - Channel 7 (PA18): Battery Current
  */
-#define ADC_BATTERY_VOLTAGE_CHANNEL  0
-#define ADC_BATTERY_CURRENT_CHANNEL  1
+#define ADC_BATTERY_VOLTAGE_CHANNEL  0    /* PD30 - AFEC0_AD0 */
+#define ADC_BATTERY_CURRENT_CHANNEL  7    /* PA18 - AFEC0_AD7 */
+
+/* ADC channels bitmask (for driver initialization) */
+#define ADC_CHANNELS ((1 << ADC_BATTERY_VOLTAGE_CHANNEL) | (1 << ADC_BATTERY_CURRENT_CHANNEL))
+
+/* Battery brick configuration */
 #define BOARD_NUMBER_BRICKS          1
-#define BOARD_ADC_BRICK_VALID        1  /* Brick 1 valid (placeholder - all bricks considered valid) */
+#define BOARD_ADC_BRICK_VALID        1
+
+/* Safety Button and LED Configuration *************************************************************/
+
+/* Safety Button: SW0 (PA9) - ACTIVE LOW (pressed = GND)
+ * SafetyButton driver expects active-HIGH, so we define BOARD_SAFETY_BUTTON_ACTIVE_LOW
+ * to signal that the driver should invert the read.
+ */
+#define GPIO_BTN_SAFETY       (GPIO_INPUT | GPIO_CFG_PULLUP | GPIO_PORT_PIOA | GPIO_PIN9)
+#define BOARD_SAFETY_BUTTON_ACTIVE_LOW  1  /* Required: driver must invert read */
+
+/* Safety LED: LED1 (PC9) - Active LOW (LED on when pin LOW) */
+#define GPIO_LED_SAFETY       (GPIO_OUTPUT | GPIO_CFG_DEFAULT | GPIO_OUTPUT_SET | GPIO_PORT_PIOC | GPIO_PIN9)
+
+/* Armed Status Output: PA20 - nARMED signal for external indication
+ * Active LOW: LOW = armed, HIGH = not armed
+ * _INIT version for initialization list, GPIO_nARMED for runtime
+ */
+#define GPIO_nARMED_INIT      (GPIO_OUTPUT | GPIO_CFG_PULLUP | GPIO_OUTPUT_SET | GPIO_PORT_PIOA | GPIO_PIN20)
+#define GPIO_nARMED           (GPIO_OUTPUT | GPIO_CFG_DEFAULT | GPIO_OUTPUT_CLEAR | GPIO_PORT_PIOA | GPIO_PIN20)
+
+/* External lockout state macros (active low: LOW=armed, HIGH=not armed) */
+#define BOARD_INDICATE_EXTERNAL_LOCKOUT_STATE(enabled) \
+	px4_arch_gpiowrite(GPIO_nARMED, !(enabled))
+#define BOARD_GET_EXTERNAL_LOCKOUT_STATE() \
+	(!px4_arch_gpioread(GPIO_nARMED))
 
 /* I2C Buses ***********************************************************************************/
 
@@ -192,6 +228,9 @@
 		GPIO_PWM1_OUT,            \
 		GPIO_PWM2_OUT,            \
 		GPIO_PWM3_OUT,            \
+		GPIO_BTN_SAFETY,          \
+		GPIO_LED_SAFETY,          \
+		GPIO_nARMED_INIT,         \
 	}
 
 // Console buffer - ENABLED: lazy initialization implemented in console_buffer.cpp

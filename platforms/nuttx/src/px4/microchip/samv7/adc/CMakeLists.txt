@@ -31,9 +31,6 @@
 #
 ############################################################################
 
-add_subdirectory(adc)
-add_subdirectory(hrt)
-add_subdirectory(version)
-add_subdirectory(board_reset)
-add_subdirectory(io_pins)
-add_subdirectory(board_critmon)
+px4_add_library(arch_adc
+	adc.cpp
+)

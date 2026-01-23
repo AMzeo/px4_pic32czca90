@@ -154,7 +154,11 @@ SafetyButton::Run()
 		return;
 	}
 
+#ifdef BOARD_SAFETY_BUTTON_ACTIVE_LOW
+	const bool button_pressed = !px4_arch_gpioread(GPIO_BTN_SAFETY);
+#else
 	const bool button_pressed = px4_arch_gpioread(GPIO_BTN_SAFETY);
+#endif
 
 	// control safety switch LED & safety button
 	if (!_has_px4io) {
