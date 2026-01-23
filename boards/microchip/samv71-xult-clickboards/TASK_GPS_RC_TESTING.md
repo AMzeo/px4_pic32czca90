@@ -2,8 +2,48 @@
 
 **Assigned To:** Engineer
 **Priority:** HIGH
-**Estimated Effort:** 1-2 days
 **Prerequisites:** SAMV71-XULT board, GPS module, RC receiver
+**Firmware Version:** Latest build with GPS/RC enabled
+**Last Updated:** January 2026
+
+---
+
+## QUICK START (TL;DR)
+
+### GPS Setup (5 minutes)
+```
+1. Wire GPS module:
+   - GPS TX  → J505 Pin 5 (PD15)
+   - GPS RX  → J505 Pin 6 (PD16)
+   - GPS VCC → 3.3V
+   - GPS GND → GND
+
+2. Power on board, connect via USB serial console
+
+3. Test:
+   nsh> gps start -d /dev/ttyS2 -b 57600
+   nsh> listener sensor_gps
+
+4. Success = lat/lon values appear, fix_type >= 3
+```
+
+### RC Setup (5 minutes)
+```
+1. Wire RC receiver:
+   - RC Signal → J505 Pin 3 (PD18)
+   - RC VCC    → 5V
+   - RC GND    → GND
+
+   NOTE: SBUS needs signal inverter! Use CRSF/DSM to avoid this.
+
+2. Power on transmitter, bind receiver
+
+3. Test:
+   nsh> rc_input start -d /dev/ttyS3
+   nsh> listener input_rc
+
+4. Success = channel values change when moving sticks (1000-2000 range)
+```
 
 ---
 
@@ -136,7 +176,7 @@ nsh> param save
 
 ```bash
 # Enable RC input on ttyS3
-nsh> param set RC_PORT_CONFIG 301
+nsh> param set RC_PORT_CONFIG 300
 
 # Set RC protocol (if needed)
 # 0=Auto, 1=SBUS, 2=DSM, 3=SUMD, 4=ST24, 5=CRSF
@@ -292,7 +332,7 @@ nsh> listener manual_control_setpoint
 | No `/dev/ttyS3` | UART4 not enabled | Add `CONFIG_SAMV7_UART4=y` to defconfig |
 | No RC data | SBUS not inverted | Add inverter circuit |
 | No RC data | Wrong pin | Verify Pin 3 (PD18) connection |
-| `rc_input status` not running | RC_PORT_CONFIG not set | `param set RC_PORT_CONFIG 301` |
+| `rc_input status` not running | RC_PORT_CONFIG not set | `param set RC_PORT_CONFIG 300` |
 | rc_lost: true | Transmitter off/binding | Power on TX, check binding |
 | Values stuck at 1500 | No signal variation | Move sticks, check TX batteries |
 
@@ -314,6 +354,134 @@ Or use dedicated SBUS inverter IC (e.g., 74HC04)
 - FrSky with "SBUS Out" option
 - TBS Crossfire (CRSF protocol - no inversion needed)
 - Spektrum (DSM protocol - no inversion needed)
+
+### 4.4 Debug Commands Deep Dive
+
+#### Check What's Running
+```bash
+# List all running modules
+nsh> top
+
+# Check specific driver status
+nsh> gps status
+nsh> rc_input status
+
+# View system messages (errors/warnings)
+nsh> dmesg
+```
+
+#### Parameter Debugging
+```bash
+# Show all GPS-related parameters
+nsh> param show GPS*
+
+# Show all RC-related parameters
+nsh> param show RC*
+
+# Show serial port configuration
+nsh> param show SER*
+
+# Reset a parameter to default
+nsh> param reset GPS_1_CONFIG
+```
+
+#### Serial Port Debugging
+```bash
+# List all serial devices
+nsh> ls /dev/tty*
+
+# Check if device exists and is accessible
+nsh> ls -l /dev/ttyS2
+nsh> ls -l /dev/ttyS3
+
+# Read raw data from serial port (Ctrl+C to stop)
+nsh> cat /dev/ttyS2    # GPS raw data
+nsh> cat /dev/ttyS3    # RC raw data (may show garbage for binary protocols)
+```
+
+#### uORB Topic Debugging
+```bash
+# List all available topics
+nsh> uorb status
+
+# Monitor specific topics
+nsh> listener sensor_gps -n 5           # 5 samples
+nsh> listener input_rc -n 10            # 10 samples
+nsh> listener vehicle_gps_position      # Processed GPS
+nsh> listener manual_control_setpoint   # Processed RC
+```
+
+### 4.5 Expected Boot Messages
+
+#### Normal Boot (No Hardware Connected)
+```
+INFO  [rc_input] valid device required
+ERROR [rc_input] Task start failed (-1)
+...
+nsh> gps status
+INFO  [gps] not running
+```
+**This is NORMAL** - drivers don't start without hardware.
+
+#### Normal Boot (GPS Connected)
+```
+INFO  [gps] starting Main GPS...
+INFO  [gps] Main GPS on /dev/ttyS2
+...
+nsh> gps status
+INFO  [gps] Main GPS:
+        protocol: UBX
+        port: /dev/ttyS2
+        baudrate: 57600
+```
+
+#### Normal Boot (RC Connected)
+```
+INFO  [rc_input] Starting RC input on /dev/ttyS3
+INFO  [rc_input] SBUS input detected
+...
+nsh> rc_input status
+INFO  [rc_input] RC input: valid
+        Protocol: SBUS
+        Channels: 16
+```
+
+### 4.6 Common Error Messages
+
+| Error Message | Meaning | Solution |
+|---------------|---------|----------|
+| `valid device required` | No RC hardware detected | Connect RC receiver, check wiring |
+| `gps not running` | GPS driver not started | Check GPS_1_CONFIG param, connect GPS |
+| `rc_lost: true` | RC signal lost | Power on transmitter, check binding |
+| `fix_type: 0` | No GPS satellite fix | Move outdoors, check antenna |
+| `param 65535 invalid` | Parameter not found | Ignore - cosmetic issue |
+| `Preflight Fail: Accel Sensor 0 missing` | No IMU connected | Expected without Click IMU boards |
+
+### 4.7 Wiring Verification Steps
+
+#### Step 1: Visual Inspection
+- [ ] All wires securely connected
+- [ ] No bent/broken pins
+- [ ] Correct voltage (3.3V for GPS, 5V for RC)
+- [ ] Common ground between all devices
+
+#### Step 2: Continuity Test (with multimeter)
+```
+GPS:
+  GPS TX ──── J505 Pin 5 (PD15) : Should show continuity
+  GPS RX ──── J505 Pin 6 (PD16) : Should show continuity
+
+RC:
+  RC Signal ── J505 Pin 3 (PD18) : Should show continuity
+```
+
+#### Step 3: Voltage Test
+```
+With board powered:
+  J505 3.3V pin : Should read 3.3V ± 0.1V
+  J505 5V pin   : Should read 5.0V ± 0.2V
+  J505 GND      : Should read 0V (reference)
+```
 
 ---
 
@@ -357,7 +525,7 @@ param set-default GPS_1_CONFIG 201      # ttyS2
 param set-default SER_GPS1_BAUD 57600   # Standard GPS baud
 
 # RC Configuration
-param set-default RC_PORT_CONFIG 301    # ttyS3
+param set-default RC_PORT_CONFIG 300    # ttyS3
 ```
 
 ### 5.4 After Code Changes
@@ -445,7 +613,7 @@ listener manual_control_setpoint  # Monitor control input
 param show GPS_1_CONFIG      # Check GPS config
 param show RC_PORT_CONFIG    # Check RC config
 param set GPS_1_CONFIG 201   # Set GPS to ttyS2
-param set RC_PORT_CONFIG 301 # Set RC to ttyS3
+param set RC_PORT_CONFIG 300 # Set RC to ttyS3
 param save                   # Save to SD card
 
 # === Debug ===
@@ -456,6 +624,86 @@ dmesg | grep -i rc          # RC debug messages
 
 ---
 
-**Document Version:** 1.0
+## Part 9: Reporting Results
+
+### 9.1 Test Report Template
+
+Please fill out and submit after testing:
+
+```
+=== GPS/RC Test Report ===
+Date: _______________
+Tester: _______________
+Board Serial: _______________
+
+GPS MODULE:
+  Model: _______________
+  Result: [ ] PASS  [ ] FAIL  [ ] NOT TESTED
+  Notes: _______________
+
+RC RECEIVER:
+  Model: _______________
+  Protocol: [ ] SBUS  [ ] CRSF  [ ] DSM  [ ] Other: ____
+  Inverter Used: [ ] Yes  [ ] No
+  Result: [ ] PASS  [ ] FAIL  [ ] NOT TESTED
+  Notes: _______________
+
+ISSUES ENCOUNTERED:
+  _______________
+  _______________
+
+CONSOLE OUTPUT (attach dmesg if errors):
+  _______________
+```
+
+### 9.2 What to Capture if Something Fails
+
+1. **Full boot log** - Copy everything from power-on to NSH prompt
+2. **dmesg output** - Run `dmesg` and copy all output
+3. **Parameter dump** - Run `param show GPS* RC* SER*`
+4. **Photo of wiring** - Clear photo showing all connections
+
+### 9.3 Known Working Configurations
+
+| GPS Module | Baud Rate | Protocol | Status |
+|------------|-----------|----------|--------|
+| u-blox NEO-M8N | 57600 | UBX | Untested |
+| Beitian BN-220 | 9600 | NMEA | Untested |
+
+| RC Receiver | Protocol | Inverter | Status |
+|-------------|----------|----------|--------|
+| FrSky X8R | SBUS | Yes | Untested |
+| TBS Crossfire | CRSF | No | Untested |
+| Spektrum AR620 | DSM2 | No | Untested |
+
+---
+
+## Part 10: Parameter Reference
+
+### GPS Parameters
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| `GPS_1_CONFIG` | 201 | Serial port (201 = GPS1 = /dev/ttyS2) |
+| `SER_GPS1_BAUD` | 57600 | Baud rate (0=auto, or specific rate) |
+| `GPS_1_PROTOCOL` | 0 | Protocol (0=auto, 1=UBX, 2=MTK, 5=NMEA) |
+
+### RC Parameters
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| `RC_PORT_CONFIG` | 300 | Serial port (300 = RC = /dev/ttyS3) |
+| `SER_RC_BAUD` | 0 | Baud rate (0=auto for most protocols) |
+
+### Serial Port Mapping (This Board)
+| Parameter Value | Port Name | Device | Physical Pins |
+|-----------------|-----------|--------|---------------|
+| 101 | TELEM1 | /dev/ttyACM0 | USB |
+| 102 | TELEM2 | /dev/ttyS1 | PA21/PB04 |
+| 201 | GPS1 | /dev/ttyS2 | PD15/PD16 |
+| 300 | RC | /dev/ttyS3 | PD18/PD19 |
+
+---
+
+**Document Version:** 1.1
 **Created:** January 2026
+**Last Updated:** January 2026
 **Status:** Ready for Testing

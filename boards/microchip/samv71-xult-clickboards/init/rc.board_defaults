@@ -40,4 +40,4 @@ param set-default SER_GPS1_BAUD 57600
 
 # RC Input Configuration
 # RC on UART4 = /dev/ttyS3 (J505 pin 3: PD18)
-param set-default RC_PORT_CONFIG 301
+param set-default RC_PORT_CONFIG 300
