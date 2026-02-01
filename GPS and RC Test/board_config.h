@@ -71,13 +71,20 @@
 #define BOARD_HAS_CONTROL_STATUS_LEDS      1
 #define BOARD_ARMED_STATE_LED  LED_BLUE
 
+/* UART2 (GPS) on J505
+ * PD15 = RXD2
+ * PD16 = TXD2
+ * Peripheral B
+ */
+
+
 /* ICM20689 on EXT1 header (not mikroBUS socket)
  * EXT1 Pin 15 = CS  = PD25
  * EXT1 Pin 9  = IRQ = PD28 (directly connected to DRDY)
  */
-#define GPIO_SPI0_CS_ICM20689    (GPIO_OUTPUT|GPIO_OUTPUT_SET|GPIO_PORT_PIOD|GPIO_PIN25)
-#define GPIO_SPI0_DRDY_ICM20689  (GPIO_INPUT|GPIO_CFG_PULLUP|GPIO_INT_FALLING|GPIO_PORT_PIOD|GPIO_PIN28)
-#define GPIO_SPI0_DRDY_ICM20689_IRQ  SAM_IRQ_PD28
+//#define GPIO_SPI0_CS_ICM20689    (GPIO_OUTPUT|GPIO_OUTPUT_SET|GPIO_PORT_PIOD|GPIO_PIN25)
+//#define GPIO_SPI0_DRDY_ICM20689  (GPIO_INPUT|GPIO_CFG_PULLUP|GPIO_INT_FALLING|GPIO_PORT_PIOD|GPIO_PIN28)
+//#define GPIO_SPI0_DRDY_ICM20689_IRQ  SAM_IRQ_PD28
 
 /* BMP388 Pressure sensor on EXT2 header via mikroBUS adapter
  * EXT2 Pin 15 = CS  = PD27
@@ -93,7 +100,6 @@
  * Compass 4 Click (AK09915) requires RST pin HIGH to operate
  */
 #define GPIO_MB1_RST     (GPIO_OUTPUT|GPIO_OUTPUT_SET|GPIO_PORT_PIOA|GPIO_PIN19)
-#define GPIO_MB2_RST     (GPIO_OUTPUT|GPIO_OUTPUT_SET|GPIO_PORT_PIOB|GPIO_PIN0)
 #define GPIO_EXT1_RST    (GPIO_OUTPUT|GPIO_OUTPUT_SET|GPIO_PORT_PIOA|GPIO_PIN5)
 #define GPIO_EXT2_RST    (GPIO_OUTPUT|GPIO_OUTPUT_SET|GPIO_PORT_PIOA|GPIO_PIN24)
 
@@ -118,20 +124,12 @@
 #define ADC_BATTERY_VOLTAGE_CHANNEL  0    /* PD30 - AFEC0_AD0 */
 #define ADC_BATTERY_CURRENT_CHANNEL  7    /* PA18 - AFEC0_AD7 */
 
-/* ADC channels bitmask (for driver initialization)
- * NOTE: If ADC_CHANNELS is expanded, corresponding GPIO_AFE0_ADx pins must be
- * configured in platforms/nuttx/src/px4/microchip/samv7/adc/adc.cpp
- */
+/* ADC channels bitmask (for driver initialization) */
 #define ADC_CHANNELS ((1 << ADC_BATTERY_VOLTAGE_CHANNEL) | (1 << ADC_BATTERY_CURRENT_CHANNEL))
 
-/* Battery brick configuration
- * BOARD_NUMBER_BRICKS: Number of power input bricks (1 for this dev board)
- * BOARD_ADC_BRICK_VALID: ADC channel for brick validity detection, or constant 1
- *   to report always-valid (no HW detection). board_common.h uses this to
- *   generate BOARD_BRICK_VALID_LIST for single-brick boards.
- */
+/* Battery brick configuration */
 #define BOARD_NUMBER_BRICKS          1
-#define BOARD_ADC_BRICK_VALID        1  /* Always valid - no HW detection on dev board */
+#define BOARD_ADC_BRICK_VALID        1
 
 /* Safety Button and LED Configuration *************************************************************/
 
@@ -193,11 +191,11 @@
 #define GPIO_PWM3_OUT    (GPIO_PERIPHB | GPIO_CFG_DEFAULT | GPIO_PORT_PIOC | GPIO_PIN26)  /* TC4 TIOA - PC26 */
 
 /* RC Input capture - TC5 (TC1 CH2) - Reserved for future use */
-#define GPIO_RC_INPUT    (GPIO_PERIPHB | GPIO_CFG_DEFAULT | GPIO_PORT_PIOC | GPIO_PIN29)  /* TC5 TIOA - PC29 */
-
 /* High-resolution timer */
 #define HRT_TIMER               0  /* use TC0 channel 0 for the HRT */
 #define HRT_TIMER_CHANNEL       0  /* use capture/compare channel 0 */
+
+
 
 /* HSMCI SD Card ***************************************************************************/
 
@@ -206,7 +204,7 @@
 #  define HSMCI0_MINOR       0
   /* Card Detect: PD18, active low, interrupt on both edges */
 #  define GPIO_HSMCI0_CD     (GPIO_INPUT | GPIO_CFG_DEFAULT | GPIO_CFG_DEGLITCH | \
-                              GPIO_INT_BOTHEDGES | GPIO_PORT_PIOD | GPIO_PIN18)
+                              GPIO_INT_BOTHEDGES | GPIO_PORT_PIOB | GPIO_PIN0)
 #  define IRQ_HSMCI0_CD      SAM_IRQ_PD18
 #endif
 
@@ -226,17 +224,13 @@
 
 #define PX4_GPIO_INIT_LIST { \
 		GPIO_nLED_BLUE,           \
-		GPIO_SPI0_CS_ICM20689,    \
-		GPIO_SPI0_DRDY_ICM20689,  \
 		GPIO_SPI0_CS_BMP388,      \
 		GPIO_MB1_RST,             \
-		GPIO_MB2_RST,             \
 		GPIO_EXT1_RST,            \
 		GPIO_EXT2_RST,            \
 		GPIO_PWM1_OUT,            \
 		GPIO_PWM2_OUT,            \
 		GPIO_PWM3_OUT,            \
-		GPIO_BTN_SAFETY,          \
 		GPIO_LED_SAFETY,          \
 		GPIO_nARMED_INIT,         \
 	}

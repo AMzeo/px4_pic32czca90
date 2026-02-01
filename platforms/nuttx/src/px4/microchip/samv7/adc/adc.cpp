@@ -44,6 +44,7 @@
 
 #include <board_config.h>
 #include <stdint.h>
+#include <errno.h>
 #include <drivers/drv_hrt.h>
 #include <drivers/drv_adc.h>
 #include <px4_arch/adc.h>
@@ -70,22 +71,30 @@
 #define rCDR(base)   REG(base, SAM_AFEC_CDR_OFFSET)   /* Channel Data */
 #define rACR(base)   REG(base, SAM_AFEC_ACR_OFFSET)   /* Analog Control */
 
+/* File-scope init flag - must be accessible from both init and uninit */
+static bool g_adc_initialized = false;
+
 int px4_arch_adc_init(uint32_t base_address)
 {
-	static bool once = false;
+	/* Only AFEC0 is supported. AFEC1 would require separate clock enable
+	 * and pin configuration. Reject unknown base addresses early.
+	 */
+	if (base_address != SAM_AFEC0_BASE) {
+		return -ENODEV;
+	}
 
-	if (!once) {
-		once = true;
-
+	if (!g_adc_initialized) {
 		irqstate_t flags = px4_enter_critical_section();
 
 		/* Enable AFEC0 peripheral clock */
 		sam_afec0_enableclk();
 
-		/* Configure ADC pins as analog inputs
-		 * IMPORTANT: Must explicitly configure GPIO for analog function
-		 * PD30 = AFEC0_AD0 (Battery Voltage)
-		 * PA18 = AFEC0_AD7 (Battery Current)
+		/* Configure ADC pins as analog inputs.
+		 * IMPORTANT: Pin configuration is coupled to ADC_CHANNELS in board_config.h.
+		 * If ADC_CHANNELS is expanded, corresponding GPIO_AFE0_ADx pins must be
+		 * added here. Currently configured:
+		 *   PD30 = AFEC0_AD0 (Battery Voltage) - ADC_BATTERY_VOLTAGE_CHANNEL
+		 *   PA18 = AFEC0_AD7 (Battery Current) - ADC_BATTERY_CURRENT_CHANNEL
 		 */
 		sam_configgpio(GPIO_AFE0_AD0);  /* PD30 */
 		sam_configgpio(GPIO_AFE0_AD7);  /* PA18 */
@@ -107,11 +116,13 @@ int px4_arch_adc_init(uint32_t base_address)
 				    AFEC_MR_ONE;
 
 		/* Extended Mode Register:
+		 * - STM: Single Trigger Mode - required for predictable software-triggered
+		 *   conversions. Without STM, the AFEC may exhibit intermittent behavior.
 		 * - RES_NO_AVERAGE: 12-bit resolution, no oversampling
 		 * - SIGNMODE: Single-ended unsigned (default)
 		 * - TAG: Enable channel number in LCDR (useful for debug)
 		 */
-		rEMR(base_address) = AFEC_EMR_RES_NOAVG | AFEC_EMR_TAG;
+		rEMR(base_address) = AFEC_EMR_STM | AFEC_EMR_RES_NOAVG | AFEC_EMR_TAG;
 
 		/* Analog Control Register:
 		 * - PGA disabled: Battery voltage dividers output 0-3.3V,
@@ -124,14 +135,20 @@ int px4_arch_adc_init(uint32_t base_address)
 
 		px4_leave_critical_section(flags);
 
-		/* Perform a test conversion to verify initialization */
+		/* Perform a test conversion to verify initialization.
+		 * NOTE: Uses CH0 (ADC_BATTERY_VOLTAGE_CHANNEL). If battery voltage
+		 * moves to a different channel, update this test accordingly.
+		 */
 		hrt_abstime now = hrt_absolute_time();
 		rCHER(base_address) = AFEC_CH0;  /* Enable channel 0 */
 		rCR(base_address) = AFEC_CR_START;
 
 		while (!(rISR(base_address) & AFEC_INT_EOC0)) {
 			if ((hrt_absolute_time() - now) > 500) {
-				return -1;  /* Timeout */
+				/* Timeout - cleanup and allow retry on next init call */
+				rCHDR(base_address) = AFEC_CH0;
+				sam_afec0_disableclk();
+				return -ETIMEDOUT;
 			}
 		}
 
@@ -141,6 +158,9 @@ int px4_arch_adc_init(uint32_t base_address)
 		(void)discard;
 
 		rCHDR(base_address) = AFEC_CH0;  /* Disable channel 0 */
+
+		/* Mark initialized only after successful completion */
+		g_adc_initialized = true;
 	}
 
 	return 0;
@@ -148,15 +168,33 @@ int px4_arch_adc_init(uint32_t base_address)
 
 void px4_arch_adc_uninit(uint32_t base_address)
 {
+	/* Only AFEC0 is supported - ignore calls with wrong base address */
+	if (base_address != SAM_AFEC0_BASE) {
+		return;
+	}
+
 	/* Disable all channels */
 	rCHDR(base_address) = AFEC_CHALL;
 
 	/* Disable AFEC0 peripheral clock */
 	sam_afec0_disableclk();
+
+	/* Reset init flag so px4_arch_adc_init() can re-enable the clock */
+	g_adc_initialized = false;
 }
 
 uint32_t px4_arch_adc_sample(uint32_t base_address, unsigned channel)
 {
+	/* Fast fail if ADC not initialized - avoids 50µs timeout wait */
+	if (!g_adc_initialized) {
+		return UINT32_MAX;
+	}
+
+	/* Only AFEC0 is supported */
+	if (base_address != SAM_AFEC0_BASE) {
+		return UINT32_MAX;
+	}
+
 	if (channel > 11) {
 		return UINT32_MAX;
 	}
@@ -201,8 +239,12 @@ float px4_arch_adc_reference_v()
 
 uint32_t px4_arch_adc_temp_sensor_mask()
 {
-	/* SAMV7 has internal temp sensor on channel 11 */
-	return (1 << 11);
+	/* SAMV7 has internal temp sensor on channel 11, but it requires
+	 * AFEC TEMPMR configuration (not implemented). Return 0 to prevent
+	 * ADC.cpp from sampling undefined CH11 data.
+	 * TODO: Implement AFEC_TEMPMR setup if MCU temperature monitoring needed.
+	 */
+	return 0;
 }
 
 uint32_t px4_arch_adc_dn_fullcount(void)
