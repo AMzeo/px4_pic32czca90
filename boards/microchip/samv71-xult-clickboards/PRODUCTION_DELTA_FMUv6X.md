@@ -140,11 +140,213 @@ This document provides a comprehensive comparison between the SAMV71-XULT-Clickb
 
 ---
 
-## 2. PWM/Timer Deep Dive
+## 2. Production-Parity Implementation Checklist
 
-### 2.1 Struct-Level Incompatibilities (Production Blocker)
+### 2.1 Must-Have (Production Blockers)
 
-**STM32 `io_timers_t` (full featured):**
+#### 1. DShot Output (DMA Burst)
+
+| Aspect | Details |
+|--------|---------|
+| **Goal** | DShot150-1200 output with DMA burst mode |
+| **New files** | `platforms/nuttx/src/px4/microchip/samv7/dshot/dshot.c` |
+| | `platforms/nuttx/src/px4/microchip/samv7/dshot/CMakeLists.txt` |
+| | `platforms/nuttx/src/px4/microchip/samv7/include/px4_arch/dshot.h` |
+| **Implementation** | DMA burst to PWMC using XDMAC + PWM DMAR |
+| **Tests** | DShot driver starts, `pwm_out` DShot modes work, scope timing verified |
+| **Effort** | 60-80 hours |
+
+#### 2. IO Timer Allocation + Capture Framework
+
+| Aspect | Details |
+|--------|---------|
+| **Goal** | Match STM32 io_timer API (allocations, IRQ handlers, capture) |
+| **Modified files** | `platforms/nuttx/src/px4/microchip/samv7/include/px4_arch/io_timer.h` |
+| | `platforms/nuttx/src/px4/microchip/samv7/io_pins/io_timer_pwmc.c` |
+| **New functions** | `io_timer_allocate_timer()`, `io_timer_allocate_channel()` |
+| | `io_timer_unallocate_*()`, IRQ handlers, capture mode |
+| **Struct changes** | Add `clock_freq`, `dshot_conf_t` to `io_timers_t` |
+| | Add `masks`, `ccr_offset` to `timer_io_channels_t` |
+| **Tests** | `input_capture` functional, `pwm_input` driver works |
+| **Effort** | 20-30 hours |
+
+#### 3. PWM Rate Flexibility (50-400 Hz)
+
+| Aspect | Details |
+|--------|---------|
+| **Goal** | Support standard 50 Hz servo PWM |
+| **Problem** | Fixed MCK/8 prescaler → min ~286 Hz (CPRD overflow) |
+| **Solution** | Dynamic prescaler selection or alternate clock source |
+| **Modified files** | `platforms/nuttx/src/px4/microchip/samv7/io_pins/io_timer_pwmc.c` |
+| **Changes** | Rate calculation with prescaler selection logic |
+| **Tests** | 50 Hz output verified on scope, servo responds |
+| **Effort** | 8-12 hours |
+
+#### 4. RC Input Path
+
+| Aspect | Details |
+|--------|---------|
+| **Goal** | Working RC input (PPM/PWM capture OR serial-only) |
+| **Option A** | TC capture path for PPM/PWM (requires TC driver + input_capture) |
+| **Option B** | Serial RC only with dedicated UART pins (no pin conflicts) |
+| **Modified files** | `boards/microchip/samv71-xult-clickboards/nuttx-config/nsh/defconfig` |
+| | `boards/microchip/samv71-xult-clickboards/src/board_config.h` |
+| **Tests** | `rc_input` driver with actual receiver, failsafe behavior |
+| **Effort** | 16-24 hours |
+
+#### 5. SD Card Detect Policy
+
+| Aspect | Details |
+|--------|---------|
+| **Goal** | Resolve PD18 conflict (RC capture vs CD) or document no-CD policy |
+| **Option A** | Reassign pins (move RC or CD) |
+| **Option B** | No-CD policy with hardened mount behavior (always assume present) |
+| **Modified files** | `boards/microchip/samv71-xult-clickboards/src/board_config.h` |
+| | `platforms/nuttx/NuttX/nuttx/.../sam_hsmci.c` (if no-CD) |
+| **Tests** | Mount/unmount behavior, hot-plug handling |
+| **Effort** | 4-8 hours |
+
+#### 6. PA7/XIN32 Conflict Resolution
+
+| Aspect | Details |
+|--------|---------|
+| **Status** | ✅ **DONE** - Motor 1 moved to PC13 |
+| **Verification** | Confirm no slow-clock pins (PA7, PA8) used for PWM |
+| **Files verified** | `boards/microchip/samv71-xult-clickboards/src/timer_config.cpp` |
+| **Lock** | Freeze PC13 mapping, document in board_config.h |
+
+---
+
+### 2.2 Should-Have (Strong Parity)
+
+#### 7. Increase PWM Outputs to 8+
+
+| Aspect | Details |
+|--------|---------|
+| **Goal** | 8 PWM outputs (match FMUv6X) |
+| **Option A** | Add PWM1 module channels (CH0-CH3) → 8 total |
+| **Option B** | Add IO co-processor (PX4IO-like) |
+| **Modified files** | `boards/microchip/samv71-xult-clickboards/src/timer_config.cpp` |
+| | `boards/microchip/samv71-xult-clickboards/src/board_config.h` |
+| **Changes** | Channel mapping, output groups, params |
+| **Effort** | 16-24 hours |
+
+#### 8. Parameter Storage Redundancy
+
+| Aspect | Details |
+|--------|---------|
+| **Goal** | EEPROM/FRAM backend for parameters (survives SD failure) |
+| **New files** | `boards/microchip/samv71-xult-clickboards/src/mtd.cpp` |
+| **Modified files** | `boards/microchip/samv71-xult-clickboards/src/board_config.h` |
+| | NuttX defconfig (enable MTD, I2C EEPROM) |
+| **Hardware** | Add I2C EEPROM/FRAM to board |
+| **Effort** | 16-24 hours |
+
+#### 9. Power Rail Control + Validation
+
+| Aspect | Details |
+|--------|---------|
+| **Goal** | USB valid, brick valid, SD power, sensor rail GPIOs |
+| **Modified files** | `boards/microchip/samv71-xult-clickboards/src/board_config.h` |
+| | `boards/microchip/samv71-xult-clickboards/src/init.c` |
+| **New GPIOs** | Power enable pins, validation inputs |
+| **Tests** | Power sequencing, brownout behavior |
+| **Hardware** | Requires custom PCB or adapter board |
+| **Effort** | 8-12 hours (software only) |
+
+#### 10. ADC Expansion
+
+| Aspect | Details |
+|--------|---------|
+| **Goal** | Rail measurement channels (3V3, 5V, etc.) |
+| **Modified files** | `boards/microchip/samv71-xult-clickboards/src/board_config.h` |
+| | `platforms/nuttx/src/px4/microchip/samv7/adc/adc.cpp` |
+| **Changes** | AFEC channel configuration, scaling factors |
+| **Hardware** | Voltage dividers for rail monitoring |
+| **Effort** | 8-12 hours |
+
+#### 11. Sensor Redundancy
+
+| Aspect | Details |
+|--------|---------|
+| **Goal** | Second IMU + second barometer |
+| **Modified files** | `boards/microchip/samv71-xult-clickboards/src/spi.cpp` |
+| | `boards/microchip/samv71-xult-clickboards/default.px4board` |
+| | Startup scripts |
+| **Hardware** | Add second IMU (SPI) + second baro (I2C/SPI) |
+| **Effort** | 16-24 hours |
+
+---
+
+### 2.3 Nice-to-Have
+
+#### 12. Camera Trigger/Capture
+
+| Aspect | Details |
+|--------|---------|
+| **Goal** | GPIO trigger + timer capture for camera sync |
+| **Effort** | 4-8 hours |
+
+#### 13. Tone Alarm/Buzzer
+
+| Aspect | Details |
+|--------|---------|
+| **Goal** | PWM or GPIO toggle for audio feedback |
+| **Effort** | 4-8 hours |
+
+#### 14. LED Strip Support
+
+| Aspect | Details |
+|--------|---------|
+| **Goal** | SPI or timer-based LED strip driver |
+| **Effort** | 8-12 hours |
+
+#### 15. Ethernet
+
+| Aspect | Details |
+|--------|---------|
+| **Status** | Not available on SAMV71-XULT hardware |
+| **Alternative** | Custom PCB with SAMV71 + PHY |
+
+---
+
+## 3. Effort Summary
+
+| Category | Items | Hours |
+|----------|-------|-------|
+| **Must-Have** | 1-6 | 108-154 |
+| **Should-Have** | 7-11 | 64-96 |
+| **Nice-to-Have** | 12-14 | 16-28 |
+| **Total** | | **188-278** |
+
+### Must-Have Breakdown
+
+| Item | Hours |
+|------|-------|
+| 1. DShot output (DMA burst) | 60-80 |
+| 2. IO timer allocation + capture | 20-30 |
+| 3. PWM rate flexibility (50 Hz) | 8-12 |
+| 4. RC input path | 16-24 |
+| 5. SD card detect policy | 4-8 |
+| 6. PA7/XIN32 resolution | ✅ Done |
+
+### Should-Have Breakdown
+
+| Item | Hours |
+|------|-------|
+| 7. PWM outputs to 8+ | 16-24 |
+| 8. Parameter storage (EEPROM) | 16-24 |
+| 9. Power rail control | 8-12 |
+| 10. ADC expansion | 8-12 |
+| 11. Sensor redundancy | 16-24 |
+
+---
+
+## 4. PWM/Timer Technical Details
+
+### 4.1 Struct-Level Incompatibilities
+
+**STM32 `io_timers_t` (target):**
 ```c
 typedef struct io_timers_t {
     uint32_t    base;
@@ -156,7 +358,7 @@ typedef struct io_timers_t {
 } io_timers_t;
 ```
 
-**SAMV7 `io_timers_t` (minimal):**
+**SAMV7 `io_timers_t` (current):**
 ```c
 typedef struct io_timers_t {
     uint32_t  base;
@@ -167,7 +369,7 @@ typedef struct io_timers_t {
 } io_timers_t;
 ```
 
-**STM32 `timer_io_channels_t`:**
+**STM32 `timer_io_channels_t` (target):**
 ```c
 typedef struct timer_io_channels_t {
     uint32_t    gpio_out;
@@ -179,7 +381,7 @@ typedef struct timer_io_channels_t {
 } timer_io_channels_t;
 ```
 
-### 2.2 Function Implementation Gap
+### 4.2 Function Implementation Gap
 
 | Function | STM32 | SAMV7 | Needed For |
 |----------|-------|-------|------------|
@@ -193,121 +395,59 @@ typedef struct timer_io_channels_t {
 | `io_timer_set_oneshot_mode()` | ✅ | ❌ | OneShot125/42 |
 | Capture mode | ✅ | ❌ | RC input, RPM |
 
-### 2.3 PWM Rate Limitation
+### 4.3 PWM Rate Limitation
 
 ```
-SAMV7 PWMC Configuration:
-- MCK = 150 MHz
-- Prescaler = MCK/8 (fixed) = 18.75 MHz
-- CPRD register = 16-bit (max 65535)
-- Minimum frequency = 18.75 MHz / 65535 ≈ 286 Hz
+SAMV7 PWMC Current Configuration:
+├── MCK = 150 MHz
+├── Prescaler = MCK/8 (fixed) = 18.75 MHz
+├── CPRD register = 16-bit (max 65535)
+└── Minimum frequency = 18.75 MHz / 65535 ≈ 286 Hz
 
 Problem: Standard servo PWM requires 50 Hz
-Solution needed: Dynamic prescaler selection
+Solution: Dynamic prescaler selection (MCK/1024 for low rates)
 ```
 
-### 2.4 Pin Conflicts
+### 4.4 Pin Conflicts
 
 | Pin | Current Use | Conflicts With | Status |
 |-----|-------------|----------------|--------|
-| PA7 | (was Motor 1) | XIN32 crystal | **FIXED** → PC13 |
-| PA9 | Safety Button | UART0_RXD | **Active** (UART0 enabled) |
-| PB0 | Motor 4 | UART0_TXD | **Active** |
+| PA7 | (was Motor 1) | XIN32 crystal | ✅ **FIXED** → PC13 |
+| PA9 | Safety Button | UART0_RXD | ⚠️ **Active** (UART0 enabled) |
+| PB0 | Motor 4 | UART0_TXD | ⚠️ **Active** |
 | PC13 | Motor 1 (new) | LCD RST | OK if LCD unused |
-| PD18 | SD Card Detect | TC5 TIOA (RC) | **Review needed** |
+| PD18 | SD Card Detect | TC5 TIOA (RC) | ⚠️ **Review needed** |
 
 ---
 
-## 3. Production Delta Matrix
+## 5. Reference Files
 
-### 3.1 Must-Have (Production Blockers)
+### STM32 FMUv6X (Reference Implementation):
+```
+boards/px4/fmu-v6x/src/board_config.h
+boards/px4/fmu-v6x/src/timer_config.cpp
+boards/px4/fmu-v6x/default.px4board
+platforms/nuttx/src/px4/stm/stm32_common/io_pins/io_timer.c
+platforms/nuttx/src/px4/stm/stm32_common/dshot/dshot.c
+platforms/nuttx/src/px4/stm/stm32_common/io_pins/input_capture.c
+platforms/nuttx/src/px4/stm/stm32_common/include/px4_arch/io_timer.h
+platforms/nuttx/src/px4/stm/stm32_common/include/px4_arch/dshot.h
+```
 
-| Item | STM32 Reference | SAMV7 Gap | Priority |
-|------|-----------------|-----------|----------|
-| **DShot output + DMA burst** | `platforms/nuttx/src/px4/stm/stm32_common/dshot/dshot.c` | `io_timer_pwmc.c` has no DMA | P0 |
-| **IO-timer allocation framework** | `io_timer.c` (allocation, IRQ, capture) | No allocation tracking | P0 |
-| **PWM frequency flexibility (50-400 Hz)** | Dynamic prescaler in `timer_set_rate()` | Fixed MCK/8, min ~286 Hz | P0 |
-| **RC input capture** | `input_capture.c` (PPM/PWM) | Reserved only, not implemented | P0 |
-| **SD card detect conflict** | N/A | PD18 vs RC capture | P0 |
-| **PA7/XIN32 resolved** | N/A | **FIXED** (now PC13) | Done |
-| **Bidirectional DShot (optional)** | `dshot.c` capture mode | Not implemented | P1 |
-
-### 3.2 Should-Have (Strong Parity)
-
-| Item | FMUv6X Implementation | SAMV7 Gap |
-|------|----------------------|-----------|
-| **Expand to 8+ outputs** | 8 PWM + capture | Only 4 (PWM0); add PWM1 or IO co-processor |
-| **Parameter storage redundancy** | I2C EEPROM/FRAM | SD only |
-| **Power rail control** | GPIO enables for 5V, HiPower, SD, sensors | None |
-| **Power brick validation** | LTC44XX + GPIO | None |
-| **USB valid detection** | GPIO (PA9) | None |
-| **ADC expansion** | 7 channels + HW rev | 2 channels only |
-| **Sensor redundancy** | 3 IMU + 2 baro | 1 IMU + 1 baro |
-| **Hardware version detect** | ADC + GPIO | None |
-
-### 3.3 Nice-to-Have
-
-| Item | Notes |
-|------|-------|
-| Camera trigger/capture | GPIO + timer capture |
-| Tone alarm/buzzer | PWM or GPIO toggle |
-| LED strip | SPI or timer-based |
-| Ethernet | Not available on SAMV71-XULT |
-| Extra I2C/SPI buses | Board rework required |
-| Heater control | PWM output + thermistor |
+### SAMV71-XULT (Current Implementation):
+```
+boards/microchip/samv71-xult-clickboards/src/board_config.h
+boards/microchip/samv71-xult-clickboards/src/timer_config.cpp
+boards/microchip/samv71-xult-clickboards/default.px4board
+platforms/nuttx/src/px4/microchip/samv7/io_pins/io_timer_pwmc.c
+platforms/nuttx/src/px4/microchip/samv7/include/px4_arch/io_timer.h
+```
 
 ---
 
-## 4. Implementation Effort Estimate
+## 6. Recommendations
 
-### 4.1 Must-Have Items
-
-| Item | Complexity | Hours | Dependencies |
-|------|------------|-------|--------------|
-| DShot + DMA driver | High | 60-80 | XDMAC driver, struct changes, dshot.h |
-| IO-timer allocation | Medium | 20-30 | Struct alignment, IRQ setup |
-| PWM capture framework | Medium | 20-30 | TC driver, callback system |
-| Dynamic prescaler (50 Hz) | Low | 8-12 | Prescaler selection logic |
-| RC input capture | Medium | 16-24 | TC capture + driver integration |
-| SD card detect resolution | Low | 4-8 | Pin reassignment or policy |
-| **Subtotal** | | **128-184** | |
-
-### 4.2 Should-Have Items
-
-| Item | Complexity | Hours | Dependencies |
-|------|------------|-------|--------------|
-| PWM1 module (4 more outputs) | Medium | 16-24 | Pin selection, timer_config |
-| EEPROM/FRAM driver | Medium | 16-24 | I2C + MTD integration |
-| Power rail GPIO control | Low | 8-12 | GPIO setup, sequencing |
-| ADC expansion (5+ channels) | Low | 8-12 | AFEC configuration |
-| Hardware version detect | Low | 4-8 | ADC + param storage |
-| Second IMU integration | Medium | 16-24 | SPI + driver config |
-| **Subtotal** | | **68-104** | |
-
-### 4.3 Nice-to-Have Items
-
-| Item | Complexity | Hours |
-|------|------------|-------|
-| Camera trigger | Low | 4-8 |
-| Tone alarm | Low | 4-8 |
-| LED strip | Low | 8-12 |
-| Extra I2C bus | Low | 4-8 |
-| **Subtotal** | | **20-36** |
-
-### 4.4 Total Effort Summary
-
-| Category | Hours | Cost @ $150/hr |
-|----------|-------|----------------|
-| Must-Have (Production blockers) | 128-184 | $19,200-27,600 |
-| Should-Have (Strong parity) | 68-104 | $10,200-15,600 |
-| Nice-to-Have | 20-36 | $3,000-5,400 |
-| **Total** | **216-324** | **$32,400-48,600** |
-
----
-
-## 5. Recommendations
-
-### 5.1 Current State (Evaluation/Prototyping)
+### Current State (Evaluation/Prototyping)
 
 The SAMV71-XULT is **suitable** for:
 - PX4 porting feasibility assessment
@@ -323,18 +463,14 @@ The SAMV71-XULT is **suitable** for:
 - Applications requiring sensor redundancy
 - Safety-critical deployments
 
-### 5.2 Path to Production
+### Path to Production
 
 1. **Custom PCB Design** - XULT dev board has fundamental limitations
-2. **Struct Alignment** - Extend `io_timers_t` and `timer_io_channels_t`
-3. **DShot + DMA** - Port STM32 dshot.c to SAMV7 XDMAC
-4. **Allocation System** - Add timer/channel tracking
-5. **Prescaler Fix** - Enable 50 Hz servo support
-6. **Sensor Redundancy** - Add 2nd/3rd IMU, 2nd baro
-7. **Storage Redundancy** - Add EEPROM/FRAM
-8. **Flight Testing** - Extensive validation
+2. **Implement Must-Have items** (108-154 hours)
+3. **Implement Should-Have items** for full parity (64-96 hours)
+4. **Flight Testing** - Extensive validation required
 
-### 5.3 Alternative Approaches
+### Alternative Approaches
 
 | Approach | Pros | Cons |
 |----------|------|------|
@@ -345,27 +481,6 @@ The SAMV71-XULT is **suitable** for:
 
 ---
 
-## 6. Reference Files
-
-### STM32 FMUv6X References:
-- `boards/px4/fmu-v6x/src/board_config.h`
-- `boards/px4/fmu-v6x/src/timer_config.cpp`
-- `boards/px4/fmu-v6x/default.px4board`
-- `platforms/nuttx/src/px4/stm/stm32_common/io_pins/io_timer.c`
-- `platforms/nuttx/src/px4/stm/stm32_common/dshot/dshot.c`
-- `platforms/nuttx/src/px4/stm/stm32_common/io_pins/input_capture.c`
-- `platforms/nuttx/src/px4/stm/stm32_common/include/px4_arch/io_timer.h`
-
-### SAMV71-XULT References:
-- `boards/microchip/samv71-xult-clickboards/src/board_config.h`
-- `boards/microchip/samv71-xult-clickboards/src/timer_config.cpp`
-- `boards/microchip/samv71-xult-clickboards/default.px4board`
-- `platforms/nuttx/src/px4/microchip/samv7/io_pins/io_timer_pwmc.c`
-- `platforms/nuttx/src/px4/microchip/samv7/include/px4_arch/io_timer.h`
-
----
-
-*Document Version: 2.0*
+*Document Version: 2.1*
 *Date: 2025*
-*Major revision: Added comprehensive feature delta analysis*
-*Author: Claude Code Assistant*
+*Format: Production-parity implementation checklist*
