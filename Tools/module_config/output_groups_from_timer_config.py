@@ -39,6 +39,11 @@ def extract_timer(line):
     if search:
         return (search.group(1) + '_' +  search.group(2)), 'imxrt'
 
+    # SAMV7 PWMC format: initIOPWMTimer(PWM::PWM0),
+    search = re.search('initIOPWMTimer\(PWM::(PWM[0-9]+)\)', line, re.IGNORECASE)
+    if search:
+        return search.group(1), 'samv7'
+
     return None, 'unknown'
 
 def extract_timer_from_channel(line, timer_names):
@@ -51,6 +56,14 @@ def extract_timer_from_channel(line, timer_names):
     search = re.search('PWM::(PWM[0-9]+).*PWM::Submodule([0-9])', line, re.IGNORECASE)
     if search:
         return str(timer_names.index((search.group(1) + '_' +  search.group(2))))
+
+    # SAMV7 PWMC format: initIOPWMChannel(io_timers, {PWM::PWM0, PWM::Channel3}, {GPIO::PortA, GPIO::Pin7}, PWMCPeripheral::B),
+    search = re.search('initIOPWMChannel.*PWM::(PWM[0-9]+)', line, re.IGNORECASE)
+    if search:
+        pwm_module = search.group(1)
+        if pwm_module in timer_names:
+            return str(timer_names.index(pwm_module))
+        return pwm_module
 
     return None
 
@@ -89,6 +102,11 @@ def get_timer_groups(timer_config_file, verbose=False):
             timer_names.append(timer)
             if imxrt_is_dshot(line):
                 dshot_support[str(len(timers))] = True
+            timers.append(str(len(timers)))
+        elif timer_type == 'samv7':
+            if verbose: print('samv7 PWMC timer found: {:}'.format(timer))
+            timer_names.append(timer)
+            dshot_support[str(len(timers))] = False  # SAMV7 PWMC does not support DShot
             timers.append(str(len(timers)))
         elif timer:
             if verbose: print('found timer def: {:}'.format(timer))

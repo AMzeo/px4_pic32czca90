@@ -158,3 +158,64 @@ static inline constexpr io_timers_channel_mapping_t initIOTimerChannelMapping(co
 
 	return ret;
 }
+
+/*******************************************************************************
+ * PWMC (PWM Controller) Helper Functions
+ *
+ * SAMV7 PWMC provides hardware PWM with 4 channels per module.
+ * - PWM0: PID 31, base 0x40020000
+ * - PWM1: PID 60, base 0x4005C000
+ ******************************************************************************/
+
+/**
+ * Initialize an IO timer for PWMC (PWM Controller)
+ * @param module PWM0 or PWM1
+ */
+static inline constexpr io_timers_t initIOPWMTimer(PWM::PWMModule module)
+{
+	io_timers_t ret{};
+	ret.base = pwmBaseRegister(module);
+	ret.clock_register = 0;  /* Clock enable handled by io_timer_pwmc.c */
+	ret.clock_bit = 0;
+	ret.vectorno = 0;
+	return ret;
+}
+
+/**
+ * Initialize a PWMC channel with GPIO pin mapping
+ * @param io_timers_conf Array of io_timers_t (for future validation)
+ * @param pwm_channel PWM module and channel (e.g., {PWM0, Channel0})
+ * @param pin GPIO port and pin (e.g., {PortB, Pin0})
+ * @param periph Peripheral function A or B (pin-dependent, see samv71_pinmap.h)
+ */
+static inline constexpr timer_io_channels_t initIOPWMChannel(const io_timers_t io_timers_conf[MAX_IO_TIMERS],
+		PWM::PWMChannel pwm_channel, GPIO::GPIOPin pin, PWMCPeripheral periph)
+{
+	timer_io_channels_t ret{};
+
+	/* GPIO configuration: Peripheral A (3) or B (4) depending on pin
+	 * NuttX GPIO encoding for SAMV7:
+	 * - Bits 21-23: Mode (GPIO_PERIPHA = 3 << 21, GPIO_PERIPHB = 4 << 21)
+	 * - Bits 16-20: Config (GPIO_CFG_DEFAULT = 0)
+	 * - Bits 5-7:   Port (PIOA=0, PIOB=1, PIOC=2, PIOD=3, PIOE=4)
+	 * - Bits 0-4:   Pin number (0-31)
+	 */
+	uint32_t gpio_mode = (periph == PWMCPeripheral::A) ? (3 << 21) : (4 << 21);
+	uint32_t gpio_cfg = (0 << 16);  /* GPIO_CFG_DEFAULT */
+	uint32_t gpio_port = ((uint32_t)pin.port << 5);
+	uint32_t gpio_pin = (uint32_t)pin.pin;
+
+	ret.gpio_out = gpio_mode | gpio_cfg | gpio_port | gpio_pin;
+	ret.gpio_in = 0;
+
+	/* Derive timer_index from PWM module
+	 * This maps to position in io_timers[] array:
+	 * PWM0 = index 0, PWM1 = index 1
+	 */
+	ret.timer_index = (uint8_t)pwm_channel.module;
+
+	/* Channel within PWMC (0-3) for register offset calculation */
+	ret.timer_channel = (uint8_t)pwm_channel.channel;
+
+	return ret;
+}

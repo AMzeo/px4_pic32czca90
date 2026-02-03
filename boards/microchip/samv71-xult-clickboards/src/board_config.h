@@ -87,13 +87,15 @@
 
 /* mikroBUS Socket RST pins - Active LOW, start HIGH to release reset
  * Socket 1: PA19 (RST), PA0 (INT)
- * Socket 2: PB0 (RST), PA6 (INT)
+ * Socket 2: PB0 (RST) - NOT AVAILABLE: PB0 used for PWMC Motor 4
  * EXT1 adapter: PA5 (RST) - for Xplained Pro extension reset line (EXT1 pin 10)
  * EXT2 adapter: PA24 (RST) - for Xplained Pro extension reset line (EXT2 pin 10)
  * Compass 4 Click (AK09915) requires RST pin HIGH to operate
+ *
+ * NOTE: GPIO_MB2_RST (PB0) removed - pin now used for PWMC0 CH0 (Motor 4)
  */
 #define GPIO_MB1_RST     (GPIO_OUTPUT|GPIO_OUTPUT_SET|GPIO_PORT_PIOA|GPIO_PIN19)
-#define GPIO_MB2_RST     (GPIO_OUTPUT|GPIO_OUTPUT_SET|GPIO_PORT_PIOB|GPIO_PIN0)
+/* GPIO_MB2_RST (PB0) REMOVED - used for PWMC Motor 4 */
 #define GPIO_EXT1_RST    (GPIO_OUTPUT|GPIO_OUTPUT_SET|GPIO_PORT_PIOA|GPIO_PIN5)
 #define GPIO_EXT2_RST    (GPIO_OUTPUT|GPIO_OUTPUT_SET|GPIO_PORT_PIOA|GPIO_PIN24)
 
@@ -169,28 +171,30 @@
 #define PX4_NUMBER_I2C_BUSES 1
 #define BOARD_NUMBER_I2C_BUSES 1
 
-/* PWM Timer Configuration ***********************************************************************************/
+/* PWM Configuration ***********************************************************************************/
 
-/* SAMV71-XULT PWM Configuration using TC (Timer/Counter):
- * TC0 CH0 (TC0) - Reserved for HRT
- * TC0 CH1 (TC1) - PWM1: PA15 (TIOA1)
- * TC0 CH2 (TC2) - RESERVED: PA26 conflicts with HSMCI DA2 (SD card data line 2)
- * TC1 CH0 (TC3) - PWM2: PC23 (TIOA3)
- * TC1 CH1 (TC4) - PWM3: PC26 (TIOA4)
- * TC1 CH2 (TC5) - Reserved for RC Input capture: PC29 (TIOA5)
+/* SAMV71-XULT PWM Configuration using PWMC (PWM Controller):
+ * PWM0 Module provides 4 independent channels for motor control.
  *
- * NOTE: TC0 CH2 (PA26) cannot be used for PWM because PA26 is the HSMCI0 DA2
- *       data line required for 4-bit SD card mode. Using PA26 for PWM would
- *       corrupt SD card writes (bits 2 and 6 are carried on D2).
+ * Motor Pin Mapping (Option A):
+ *   Motor 1 (CH3): PA7  - GPIO_PWMC0_H3 (Peripheral B)
+ *   Motor 2 (CH1): PA2  - GPIO_PWMC0_H1 (Peripheral A)
+ *   Motor 3 (CH2): PC19 - GPIO_PWMC0_H2 (Peripheral B)
+ *   Motor 4 (CH0): PB0  - GPIO_PWMC0_H0 (Peripheral A)
+ *
+ * Clock Configuration:
+ *   MCK = 150MHz, CPRE = 3 (MCK/8 = 18.75MHz)
+ *   For 400Hz PWM: CPRD = 46875
+ *
+ * NOTE: PB0 (Motor 4) was previously used for GPIO_MB2_RST (mikroBUS Socket 2 reset).
+ *       That function has been removed to allow PWMC use.
+ *
+ * Timer/Counter usage (separate from PWMC):
+ *   TC0 CH0 (TC0) - Reserved for HRT (high-resolution timer)
+ *   TC1 CH2 (TC5) - Reserved for RC Input capture: PC29 (TIOA5)
  */
 
-#define DIRECT_PWM_OUTPUT_CHANNELS  3
-
-/* PWM Output GPIO Definitions - TC TIOA outputs for PWM */
-#define GPIO_PWM1_OUT    (GPIO_PERIPHB | GPIO_CFG_DEFAULT | GPIO_PORT_PIOA | GPIO_PIN15)  /* TC1 TIOA - PA15 */
-/* GPIO_PWM2_OUT (PA26) REMOVED - conflicts with HSMCI0 DA2 (SD card data line 2) */
-#define GPIO_PWM2_OUT    (GPIO_PERIPHB | GPIO_CFG_DEFAULT | GPIO_PORT_PIOC | GPIO_PIN23)  /* TC3 TIOA - PC23 */
-#define GPIO_PWM3_OUT    (GPIO_PERIPHB | GPIO_CFG_DEFAULT | GPIO_PORT_PIOC | GPIO_PIN26)  /* TC4 TIOA - PC26 */
+#define DIRECT_PWM_OUTPUT_CHANNELS  4
 
 /* RC Input capture - TC5 (TC1 CH2) - Reserved for future use */
 #define GPIO_RC_INPUT    (GPIO_PERIPHB | GPIO_CFG_DEFAULT | GPIO_PORT_PIOC | GPIO_PIN29)  /* TC5 TIOA - PC29 */
@@ -230,12 +234,8 @@
 		GPIO_SPI0_DRDY_ICM20689,  \
 		GPIO_SPI0_CS_BMP388,      \
 		GPIO_MB1_RST,             \
-		GPIO_MB2_RST,             \
 		GPIO_EXT1_RST,            \
 		GPIO_EXT2_RST,            \
-		GPIO_PWM1_OUT,            \
-		GPIO_PWM2_OUT,            \
-		GPIO_PWM3_OUT,            \
 		GPIO_BTN_SAFETY,          \
 		GPIO_LED_SAFETY,          \
 		GPIO_nARMED_INIT,         \
@@ -245,8 +245,10 @@
 // (ensure_initialized() with double-checked locking avoids static init issues)
 #define BOARD_ENABLE_CONSOLE_BUFFER
 
-/* Number of IO timers used for PWM (one timer per PWM channel) */
-#define BOARD_NUM_IO_TIMERS 3
+/* Number of IO timers used for PWM (PWMC modules)
+ * Using PWM0 only - provides 4 channels (CH0-CH3)
+ */
+#define BOARD_NUM_IO_TIMERS 1
 
 __BEGIN_DECLS
 

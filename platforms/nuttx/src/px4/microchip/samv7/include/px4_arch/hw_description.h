@@ -85,6 +85,60 @@ static inline constexpr uint32_t timerBaseRegister(Timer::Timer timer)
 }
 
 /*
+ * SAMV7 PWM Controller (PWMC) Hardware Description
+ *
+ * SAMV7 has 2 PWMC modules (PWM0, PWM1), each with 4 channels (CH0-CH3):
+ * - PWM0: base 0x40020000, PID 31
+ * - PWM1: base 0x4005C000, PID 60
+ *
+ * Each channel has independent period (CPRD) and duty cycle (CDTY) registers.
+ * Use CDTYUPD/CPRDUPD for glitch-free updates during PWM operation.
+ */
+namespace PWM
+{
+enum PWMModule {
+	PWM0 = 0,
+	PWM1 = 1,
+};
+
+enum Channel {
+	Channel0 = 0,
+	Channel1 = 1,
+	Channel2 = 2,
+	Channel3 = 3,
+};
+
+struct PWMChannel {
+	PWMModule module;
+	Channel channel;
+};
+}
+
+/* Peripheral function for PWMC GPIO pins (A or B depending on pin) */
+enum class PWMCPeripheral {
+	A = 0,  /* GPIO_PERIPHA */
+	B = 1,  /* GPIO_PERIPHB */
+};
+
+/* PWMC base addresses - NuttX may define these in hardware/sam_memorymap.h */
+#ifndef SAM_PWM0_BASE
+#define SAM_PWM0_BASE  0x40020000
+#endif
+#ifndef SAM_PWM1_BASE
+#define SAM_PWM1_BASE  0x4005C000
+#endif
+
+static inline constexpr uint32_t pwmBaseRegister(PWM::PWMModule module)
+{
+	switch (module) {
+	case PWM::PWM0: return SAM_PWM0_BASE;
+	case PWM::PWM1: return SAM_PWM1_BASE;
+	}
+
+	return 0;
+}
+
+/*
  * GPIO
  */
 namespace GPIO
