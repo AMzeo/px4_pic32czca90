@@ -176,18 +176,22 @@
 /* SAMV71-XULT PWM Configuration using PWMC (PWM Controller):
  * PWM0 Module provides 4 independent channels for motor control.
  *
- * Motor Pin Mapping (Option A):
- *   Motor 1 (CH3): PA7  - GPIO_PWMC0_H3 (Peripheral B)
- *   Motor 2 (CH1): PA2  - GPIO_PWMC0_H1 (Peripheral A)
- *   Motor 3 (CH2): PC19 - GPIO_PWMC0_H2 (Peripheral B)
- *   Motor 4 (CH0): PB0  - GPIO_PWMC0_H0 (Peripheral A)
+ * Motor Pin Mapping:
+ *   Motor 1 (CH3): PC13 - GPIO_PWMC0_H3 (Peripheral B) - EXT2 Pin 4
+ *   Motor 2 (CH1): PA2  - GPIO_PWMC0_H1 (Peripheral A) - EXT2 Pin 9
+ *   Motor 3 (CH2): PC19 - GPIO_PWMC0_H2 (Peripheral B) - EXT2 Pin 7
+ *   Motor 4 (CH0): PB0  - GPIO_PWMC0_H0 (Peripheral A) - EXT1 Pin 13
+ *
+ * CRITICAL: PA7 was originally used for Motor 1 but conflicts with XIN32
+ *           (32.768 kHz slow crystal) when BOARD_HAVE_SLOWXTAL=1. Moved to PC13.
  *
  * Clock Configuration:
  *   MCK = 150MHz, CPRE = 3 (MCK/8 = 18.75MHz)
  *   For 400Hz PWM: CPRD = 46875
+ *   LIMITATION: Minimum frequency ~286 Hz (16-bit CPRD overflow at lower rates)
  *
- * NOTE: PB0 (Motor 4) was previously used for GPIO_MB2_RST (mikroBUS Socket 2 reset).
- *       That function has been removed to allow PWMC use.
+ * NOTE: PB0 (Motor 4) was previously GPIO_MB2_RST. Also conflicts with UART0_TXD.
+ *       PA9 (Safety Button) conflicts with UART0_RXD when UART0 is enabled.
  *
  * Timer/Counter usage (separate from PWMC):
  *   TC0 CH0 (TC0) - Reserved for HRT (high-resolution timer)
