@@ -36,11 +36,11 @@
  *
  * Configuration data for the SAMV71 PWM driver using PWMC (PWM Controller).
  *
- * SAMV71-XULT PWMC Output Configuration (Option A):
- *   Motor 1 (CH3): PA7  - GPIO_PWMC0_H3 (Peripheral B)
- *   Motor 2 (CH1): PA2  - GPIO_PWMC0_H1 (Peripheral A)
- *   Motor 3 (CH2): PC19 - GPIO_PWMC0_H2 (Peripheral B)
- *   Motor 4 (CH0): PB0  - GPIO_PWMC0_H0 (Peripheral A)
+ * SAMV71-XULT PWMC Output Configuration:
+ *   Motor 1 (CH3): PC13 - GPIO_PWMC0_H3 (Peripheral B) - EXT2 Pin 4
+ *   Motor 2 (CH1): PA2  - GPIO_PWMC0_H1 (Peripheral A) - EXT2 Pin 9
+ *   Motor 3 (CH2): PC19 - GPIO_PWMC0_H2 (Peripheral B) - EXT2 Pin 7
+ *   Motor 4 (CH0): PB0  - GPIO_PWMC0_H0 (Peripheral A) - EXT1 Pin 13
  *
  * Clock Configuration:
  *   MCK = 150MHz, CPRE = 3 (MCK/8 = 18.75MHz)
@@ -48,6 +48,9 @@
  *
  * NOTE: TC0 CH0 is still used for HRT (high-resolution timer).
  *       TC1 CH2 (TC5, PC29) is reserved for RC Input capture.
+ *
+ * CRITICAL: PA7 was moved to PC13 because PA7 conflicts with XIN32
+ *           (32.768 kHz slow crystal input) when BOARD_HAVE_SLOWXTAL=1.
  */
 
 #include <px4_arch/io_timer_hw_description.h>
@@ -68,13 +71,13 @@ const io_timers_t io_timers[MAX_IO_TIMERS] = {
  * Order determines motor number (index 0 = Motor 1, etc.)
  * Peripheral function (A or B) depends on specific pin - verified in samv71_pinmap.h
  *
- * Channel 0 (Motor 1): PWM0 CH3 -> PA7  (Peripheral B)
- * Channel 1 (Motor 2): PWM0 CH1 -> PA2  (Peripheral A)
- * Channel 2 (Motor 3): PWM0 CH2 -> PC19 (Peripheral B)
- * Channel 3 (Motor 4): PWM0 CH0 -> PB0  (Peripheral A)
+ * Channel 0 (Motor 1): PWM0 CH3 -> PC13 (Peripheral B) - EXT2 Pin 4
+ * Channel 1 (Motor 2): PWM0 CH1 -> PA2  (Peripheral A) - EXT2 Pin 9
+ * Channel 2 (Motor 3): PWM0 CH2 -> PC19 (Peripheral B) - EXT2 Pin 7
+ * Channel 3 (Motor 4): PWM0 CH0 -> PB0  (Peripheral A) - EXT1 Pin 13
  */
 const timer_io_channels_t timer_io_channels[MAX_TIMER_IO_CHANNELS] = {
-	initIOPWMChannel(io_timers, {PWM::PWM0, PWM::Channel3}, {GPIO::PortA, GPIO::Pin7},  PWMCPeripheral::B),  /* Motor 1 */
+	initIOPWMChannel(io_timers, {PWM::PWM0, PWM::Channel3}, {GPIO::PortC, GPIO::Pin13}, PWMCPeripheral::B),  /* Motor 1 - PC13 (was PA7/XIN32) */
 	initIOPWMChannel(io_timers, {PWM::PWM0, PWM::Channel1}, {GPIO::PortA, GPIO::Pin2},  PWMCPeripheral::A),  /* Motor 2 */
 	initIOPWMChannel(io_timers, {PWM::PWM0, PWM::Channel2}, {GPIO::PortC, GPIO::Pin19}, PWMCPeripheral::B),  /* Motor 3 */
 	initIOPWMChannel(io_timers, {PWM::PWM0, PWM::Channel0}, {GPIO::PortB, GPIO::Pin0},  PWMCPeripheral::A),  /* Motor 4 */

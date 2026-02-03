@@ -31,7 +31,7 @@ For 400 Hz PWM: CPRD = 18,750,000 / 400 = 46,875 ticks
 
 | Motor | PWM Channel | GPIO Pin | Peripheral | Header Location |
 |-------|-------------|----------|------------|-----------------|
-| Motor 1 | PWM0 CH3 | PA7 | Peripheral B | **Arduino A1** |
+| Motor 1 | PWM0 CH3 | **PC13** | Peripheral B | **EXT2 Pin 4** |
 | Motor 2 | PWM0 CH1 | PA2 | Peripheral A | **EXT2 Pin 9** |
 | Motor 3 | PWM0 CH2 | PC19 | Peripheral B | **EXT2 Pin 7** (also mikroBUS1 PWM) |
 | Motor 4 | PWM0 CH0 | PB0 | Peripheral A | **EXT1 Pin 13** |
@@ -39,11 +39,13 @@ For 400 Hz PWM: CPRD = 18,750,000 / 400 = 46,875 ticks
 ### Pin Verification (from SAMV71-XULT board.h)
 
 ```
-PA7  - Arduino header A1 (analog input header, directly accessible)
+PC13 - EXT2 connector Pin 4 (N/C, available for PWM)
 PA2  - EXT2 connector Pin 9
 PC19 - EXT2 connector Pin 7 (also mikroBUS1 PWM pin)
 PB0  - EXT1 connector Pin 13 (was MB2_RST, repurposed for Motor 4)
 ```
+
+**CRITICAL FIX (2025):** Motor 1 was moved from PA7 to PC13 because PA7 is XIN32 (32.768 kHz slow crystal input). Using PA7 for PWM would conflict with the RTC when `BOARD_HAVE_SLOWXTAL=1`.
 
 **WARNING:** Do NOT probe EXT1-9 (PD28 = IMU DRDY) or EXT2-3 (PD30 = ADC battery voltage)!
 
@@ -139,7 +141,7 @@ const io_timers_t io_timers[MAX_IO_TIMERS] = {
 };
 
 const timer_io_channels_t timer_io_channels[MAX_TIMER_IO_CHANNELS] = {
-    initIOPWMChannel(io_timers, {PWM::PWM0, PWM::Channel3}, {GPIO::PortA, GPIO::Pin7},  PWMCPeripheral::B),  /* Motor 1 */
+    initIOPWMChannel(io_timers, {PWM::PWM0, PWM::Channel3}, {GPIO::PortC, GPIO::Pin13}, PWMCPeripheral::B),  /* Motor 1 - PC13 (was PA7/XIN32) */
     initIOPWMChannel(io_timers, {PWM::PWM0, PWM::Channel1}, {GPIO::PortA, GPIO::Pin2},  PWMCPeripheral::A),  /* Motor 2 */
     initIOPWMChannel(io_timers, {PWM::PWM0, PWM::Channel2}, {GPIO::PortC, GPIO::Pin19}, PWMCPeripheral::B),  /* Motor 3 */
     initIOPWMChannel(io_timers, {PWM::PWM0, PWM::Channel0}, {GPIO::PortB, GPIO::Pin0},  PWMCPeripheral::A),  /* Motor 4 */
