@@ -31,19 +31,21 @@ For 400 Hz PWM: CPRD = 18,750,000 / 400 = 46,875 ticks
 
 | Motor | PWM Channel | GPIO Pin | Peripheral | Header Location |
 |-------|-------------|----------|------------|-----------------|
-| Motor 1 | PWM0 CH3 | PA7 | Peripheral B | EXT1 Pin 7 |
-| Motor 2 | PWM0 CH1 | PA2 | Peripheral A | EXT1 Pin 9 |
-| Motor 3 | PWM0 CH2 | PC19 | Peripheral B | EXT2 Pin 9 |
-| Motor 4 | PWM0 CH0 | PB0 | Peripheral A | EXT2 Pin 3 |
+| Motor 1 | PWM0 CH3 | PA7 | Peripheral B | **Arduino A1** |
+| Motor 2 | PWM0 CH1 | PA2 | Peripheral A | **EXT2 Pin 9** |
+| Motor 3 | PWM0 CH2 | PC19 | Peripheral B | **EXT2 Pin 7** (also mikroBUS1 PWM) |
+| Motor 4 | PWM0 CH0 | PB0 | Peripheral A | **EXT1 Pin 13** |
 
-### Pin Verification (from SAMV71-XULT Schematic)
+### Pin Verification (from SAMV71-XULT board.h)
 
 ```
-PA7  - EXT1 connector, directly accessible
-PA2  - EXT1 connector, directly accessible
-PC19 - EXT2 connector, directly accessible
-PB0  - EXT2 connector (was MB2_RST, repurposed for Motor 4)
+PA7  - Arduino header A1 (analog input header, directly accessible)
+PA2  - EXT2 connector Pin 9
+PC19 - EXT2 connector Pin 7 (also mikroBUS1 PWM pin)
+PB0  - EXT1 connector Pin 13 (was MB2_RST, repurposed for Motor 4)
 ```
+
+**WARNING:** Do NOT probe EXT1-9 (PD28 = IMU DRDY) or EXT2-3 (PD30 = ADC battery voltage)!
 
 ## Files Modified/Created
 
@@ -132,11 +134,11 @@ New driver implementing the io_timer interface for PWMC hardware. Key functions:
 Updated to use PWMC:
 
 ```cpp
-constexpr io_timers_t io_timers[MAX_IO_TIMERS] = {
+const io_timers_t io_timers[MAX_IO_TIMERS] = {
     initIOPWMTimer(PWM::PWM0),
 };
 
-constexpr timer_io_channels_t timer_io_channels[MAX_TIMER_IO_CHANNELS] = {
+const timer_io_channels_t timer_io_channels[MAX_TIMER_IO_CHANNELS] = {
     initIOPWMChannel(io_timers, {PWM::PWM0, PWM::Channel3}, {GPIO::PortA, GPIO::Pin7},  PWMCPeripheral::B),  /* Motor 1 */
     initIOPWMChannel(io_timers, {PWM::PWM0, PWM::Channel1}, {GPIO::PortA, GPIO::Pin2},  PWMCPeripheral::A),  /* Motor 2 */
     initIOPWMChannel(io_timers, {PWM::PWM0, PWM::Channel2}, {GPIO::PortC, GPIO::Pin19}, PWMCPeripheral::B),  /* Motor 3 */
@@ -418,10 +420,14 @@ nsh> reboot
 
 | Motor | Pin | Header | Expected Signal |
 |-------|-----|--------|-----------------|
-| Motor 1 | PA7 | EXT1-7 | 400Hz, 1000us pulse |
-| Motor 2 | PA2 | EXT1-9 | 400Hz, 1000us pulse |
-| Motor 3 | PC19 | EXT2-9 | 400Hz, 1000us pulse |
-| Motor 4 | PB0 | EXT2-3 | 400Hz, 1000us pulse |
+| Motor 1 | PA7 | **Arduino A1** | 400Hz, 1000us pulse |
+| Motor 2 | PA2 | **EXT2 Pin 9** | 400Hz, 1000us pulse |
+| Motor 3 | PC19 | **EXT2 Pin 7** | 400Hz, 1000us pulse |
+| Motor 4 | PB0 | **EXT1 Pin 13** | 400Hz, 1000us pulse |
+
+**WARNING:** Do NOT probe:
+- EXT1 Pin 9 (PD28) - This is IMU DRDY, not PA2!
+- EXT2 Pin 3 (PD30) - This is ADC battery voltage, not PB0!
 
 ### Expected Waveform Characteristics
 
