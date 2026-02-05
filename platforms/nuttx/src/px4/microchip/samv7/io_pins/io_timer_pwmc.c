@@ -512,8 +512,10 @@ int io_timer_set_ccr(unsigned channel, uint16_t value)
 	uint32_t ch_base = get_channel_reg_base(channel);
 	uint8_t timer_idx = timer_io_channels[channel].timer_index;
 
-	/* Convert microseconds to timer ticks using current clock frequency */
-	uint32_t ticks = (uint32_t)value * g_timer_clock[timer_idx] / 1000000UL;
+	/* Convert microseconds to timer ticks using current clock frequency
+	 * Use uint64_t to prevent overflow: 2000 * 2343750 > uint32_t max!
+	 */
+	uint32_t ticks = (uint64_t)value * g_timer_clock[timer_idx] / 1000000ULL;
 
 	/* Clamp to period */
 	if (ticks > g_timer_period[timer_idx]) {
@@ -541,8 +543,10 @@ uint16_t io_channel_get_ccr(unsigned channel)
 	uint8_t timer_idx = timer_io_channels[channel].timer_index;
 	uint32_t ticks = pwm_ch_getreg(ch_base, PWM_CDTY_OFFSET);
 
-	/* Convert back to microseconds using current clock frequency */
-	return (uint16_t)(ticks * 1000000UL / g_timer_clock[timer_idx]);
+	/* Convert back to microseconds using current clock frequency
+	 * Use uint64_t to prevent overflow: 46875 * 1000000 > uint32_t max!
+	 */
+	return (uint16_t)((uint64_t)ticks * 1000000ULL / g_timer_clock[timer_idx]);
 }
 
 /**
