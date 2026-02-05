@@ -38,7 +38,19 @@ Even when `io_timer_set_rate()` was called with 50Hz:
 3. Hardware truncated to ~47,000
 4. Output remained at ~400Hz
 
-## Solution: Dynamic Prescaler Selection
+### Channel Disable Timing Issue
+
+Even after fixing the prescaler selection, the 50Hz setting still didn't work. The second issue was **insufficient wait time when disabling channels**.
+
+Per the SAMV71 datasheet (DS60001527J):
+- p.1586: "Modifying CPOL in PWM_CMRx while the channel is enabled can lead to unexpected behavior"
+- p.1607: Update registers are latched and applied at the next PWM period boundary
+
+The original code used a tight spin loop (~microseconds) to wait for the channel to disable. However, the channel needs to complete its current period before fully stopping. At 400Hz, one period = 2.5ms.
+
+**Empirical observation:** Without proper wait, CMR prescaler changes didn't take effect. With a proper delay (checking SR until channel bit clears, ~2ms at 400Hz), the prescaler change worked.
+
+## Solution: Dynamic Prescaler Selection + Proper Disable Wait
 
 The fix implements **dynamic prescaler selection** based on the requested PWM rate:
 
@@ -61,11 +73,21 @@ At 287 Hz with MCK/8: CPRD = 65,331 < 65,535 (fits)
 
 When changing between prescalers (e.g., 400Hz to 50Hz), the PWMC channels must be:
 1. **Disabled** (write to PWM_DIS register)
-2. **CMR updated** with new CPRE value
-3. **CPRD updated** with new period
-4. **Re-enabled** (write to PWM_ENA register)
+2. **Wait for channel to fully disable** (poll SR until channel bit clears, up to 50ms)
+3. **CMR updated** with new CPRE value
+4. **CPRD updated** with new period
+5. **Re-enabled** (write to PWM_ENA register)
 
-This is because the CMR (Channel Mode Register) which contains the prescaler setting can only be changed when the channel is disabled.
+**Critical:** The datasheet warns that modifying CPOL (and by extension other mode fields) while the channel is enabled can lead to unexpected behavior. The channel must complete its current period before it's fully disabled, so a proper wait (not a tight spin loop) is required.
+
+```c
+/* Wait for channel to disable - must complete current period first */
+while ((sr & (1 << pwm_ch)) && timeout_ms > 0) {
+    up_udelay(1000);  /* 1ms delay */
+    sr = pwm_getreg(base + PWM_SR_OFFSET);
+    timeout_ms--;
+}
+```
 
 ## Files Modified
 
@@ -113,13 +135,15 @@ static uint8_t select_prescaler_for_rate(unsigned rate, uint32_t *clock_freq)
 ### Console Output (After Fix)
 
 ```
-nsh> param set PWM_MAIN_TIM0 50
-  PWM_MAIN_TIM0: curr: 400 -> new: 50
-nsh> pwm_out stop
-nsh> pwm_out start
 INFO  [arch_io_pins] PWMC Timer 0: rate=50Hz cpre=6 clk=2343750Hz period=46875 (prescaler changed)
-nsh> pwm_out status
-Timer 0: rate:  50 channels: 0 1 2 3
+INFO  [arch_io_pins] PWMC Ch 0: disabled after 2ms
+INFO  [arch_io_pins] PWMC Ch 0 (pwm_ch=3): CMR=0x00000206 (wrote 0x00000206) CPRD=46875 (wrote 46875)
+INFO  [arch_io_pins] PWMC Ch 1: disabled after 2ms
+INFO  [arch_io_pins] PWMC Ch 1 (pwm_ch=1): CMR=0x00000206 (wrote 0x00000206) CPRD=46875 (wrote 46875)
+INFO  [arch_io_pins] PWMC Ch 2: disabled after 2ms
+INFO  [arch_io_pins] PWMC Ch 2 (pwm_ch=2): CMR=0x00000206 (wrote 0x00000206) CPRD=46875 (wrote 46875)
+INFO  [arch_io_pins] PWMC Ch 3: disabled after 2ms
+INFO  [arch_io_pins] PWMC Ch 3 (pwm_ch=0): CMR=0x00000206 (wrote 0x00000206) CPRD=46875 (wrote 46875)
 ```
 
 ### Key Indicators
@@ -128,6 +152,8 @@ Timer 0: rate:  50 channels: 0 1 2 3
 2. `clk=2343750Hz` - Clock frequency = 150MHz / 64
 3. `period=46875` - Fits in 16-bit register
 4. `(prescaler changed)` - Indicates prescaler was updated
+5. `disabled after 2ms` - Channel properly waited for disable (within 400Hz period of 2.5ms)
+6. `CMR=0x00000206` - Confirms CPRE=6 (bits [3:0]) and CPOL=1 (bit 9)
 
 ### Oscilloscope Verification
 
@@ -154,6 +180,9 @@ The higher prescaler (MCK/8) provides better duty cycle resolution for high-freq
 
 ## References
 
-- SAMV71 Datasheet: Section 49 (PWM Controller)
+- SAMV71 Datasheet (DS60001527J): Section 49 (PWM Controller)
+  - p.1586: "Modifying CPOL in PWM_CMRx while the channel is enabled can lead to unexpected behavior"
+  - p.1607: Update registers are latched and applied at the next PWM period boundary
 - PWM_CPRD register: 16-bit, offset 0x0C from channel base
 - PWM_CMR register: CPRE field bits [3:0]
+- PWM_SR register: Channel enabled status bits [3:0]

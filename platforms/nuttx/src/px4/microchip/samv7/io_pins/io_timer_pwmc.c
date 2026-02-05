@@ -259,9 +259,15 @@ int io_timer_init_timer(unsigned timer)
 	/* Set default period for 400Hz PWM */
 	g_timer_period[timer] = g_timer_clock[timer] / PWM_DEFAULT_RATE;
 
-	PX4_INFO("PWMC Timer %u init: rate=%uHz cpre=%u clk=%luHz period=%lu",
-		 timer, PWM_DEFAULT_RATE, g_timer_cpre[timer],
+	PX4_INFO("PWMC Timer %u init: base=0x%08lx rate=%uHz cpre=%u clk=%luHz period=%lu",
+		 timer, (unsigned long)io_timers[timer].base, PWM_DEFAULT_RATE, g_timer_cpre[timer],
 		 (unsigned long)g_timer_clock[timer], (unsigned long)g_timer_period[timer]);
+
+	/* Direct read of PWM0 CMR1 (PA2 channel) at absolute address to verify */
+	uint32_t direct_cmr1 = getreg32(0x40020220);  /* PWM0_CMR1 absolute address */
+	uint32_t direct_cprd1 = getreg32(0x4002022C); /* PWM0_CPRD1 absolute address */
+	PX4_INFO("PWMC Direct read PWM0_CH1: CMR1@0x40020220=0x%08lx CPRD1@0x4002022C=%lu",
+		 (unsigned long)direct_cmr1, (unsigned long)direct_cprd1);
 
 	g_timers_initialized[timer] = true;
 
@@ -306,7 +312,17 @@ int io_timer_channel_init(unsigned channel, io_timer_channel_mode_t mode,
 		uint32_t gpio = timer_io_channels[channel].gpio_out;
 
 		/* Configure GPIO for PWMC output (peripheral A or B) */
+		PX4_INFO("PWMC Ch %u: configuring GPIO 0x%08lx", channel, (unsigned long)gpio);
 		sam_configgpio(gpio);
+
+		/* Debug: Read back PIO registers to verify peripheral mux */
+		uint32_t pio_base = 0x400E0E00;  /* PIOA base */
+		uint32_t pin_mask = (1 << 2);     /* PA2 */
+		uint32_t psr = getreg32(pio_base + 0x08);   /* PIO_PSR - PIO Status (1=PIO, 0=peripheral) */
+		uint32_t abcdsr1 = getreg32(pio_base + 0x70);  /* PIO_ABCDSR1 */
+		uint32_t abcdsr2 = getreg32(pio_base + 0x74);  /* PIO_ABCDSR2 */
+		PX4_INFO("PIOA: PSR=0x%08lx ABCDSR1=0x%08lx ABCDSR2=0x%08lx (PA2 mask=0x%08lx)",
+			 (unsigned long)psr, (unsigned long)abcdsr1, (unsigned long)abcdsr2, (unsigned long)pin_mask);
 
 		/* Disable channel first (write to DIS register) */
 		pwm_putreg(base + PWM_DIS_OFFSET, (1 << pwm_ch));
@@ -328,8 +344,17 @@ int io_timer_channel_init(unsigned channel, io_timer_channel_mode_t mode,
 		 */
 		pwm_ch_putreg(ch_base, PWM_CDTY_OFFSET, 0);
 
-		PX4_DEBUG("PWMC Ch %u: cmr=0x%08lx cprd=%lu cdty=0",
-			  channel, (unsigned long)cmr, (unsigned long)g_timer_period[timer_idx]);
+		/* Debug: verify registers and addresses */
+		uint32_t cmr_addr = ch_base;
+		uint32_t cprd_addr = ch_base + (PWM_CPRD_OFFSET - PWM_CMR_OFFSET);
+		uint32_t cmr_read = pwm_ch_getreg(ch_base, PWM_CMR_OFFSET);
+		uint32_t cprd_read = pwm_ch_getreg(ch_base, PWM_CPRD_OFFSET);
+		uint32_t sr = pwm_getreg(base + PWM_SR_OFFSET);
+		PX4_INFO("PWMC Ch %u init (pwm_ch=%u): CMR@0x%08lx=0x%08lx CPRD@0x%08lx=%lu SR=0x%08lx",
+			 channel, pwm_ch,
+			 (unsigned long)cmr_addr, (unsigned long)cmr_read,
+			 (unsigned long)cprd_addr, (unsigned long)cprd_read,
+			 (unsigned long)sr);
 
 		/* Enable channel (write to ENA register) */
 		pwm_putreg(base + PWM_ENA_OFFSET, (1 << pwm_ch));
@@ -396,12 +421,40 @@ int io_timer_set_rate(unsigned timer, unsigned rate)
 				/* Prescaler changed: must disable channel, update CMR, re-enable */
 				pwm_putreg(base + PWM_DIS_OFFSET, (1 << pwm_ch));
 
+				/* Wait for channel to be disabled - check SR bit
+				 * CRITICAL: Channel finishes current period before disabling!
+				 * At 400Hz, period = 2.5ms. At 50Hz, period = 20ms.
+				 * Must wait long enough for the period to complete.
+				 */
+				uint32_t sr = pwm_getreg(base + PWM_SR_OFFSET);
+				int timeout_ms = 50;  /* 50ms should be enough for any PWM period */
+
+				while ((sr & (1 << pwm_ch)) && timeout_ms > 0) {
+					up_udelay(1000);  /* 1ms delay */
+					sr = pwm_getreg(base + PWM_SR_OFFSET);
+					timeout_ms--;
+				}
+
+				if (timeout_ms == 0) {
+					PX4_ERR("PWMC Ch %u: timeout waiting for disable (SR=0x%08lx)",
+						ch, (unsigned long)sr);
+				} else {
+					PX4_INFO("PWMC Ch %u: disabled after %dms", ch, 50 - timeout_ms);
+				}
+
 				/* Update CMR with new prescaler */
 				uint32_t cmr = (new_cpre << PWM_CMR_CPRE_SHIFT) | PWM_CMR_CPOL;
 				pwm_ch_putreg(ch_base, PWM_CMR_OFFSET, cmr);
 
 				/* Write CPRD directly (channel is disabled) */
 				pwm_ch_putreg(ch_base, PWM_CPRD_OFFSET, period);
+
+				/* Verify writes by reading back */
+				uint32_t cmr_read = pwm_ch_getreg(ch_base, PWM_CMR_OFFSET);
+				uint32_t cprd_read = pwm_ch_getreg(ch_base, PWM_CPRD_OFFSET);
+				PX4_INFO("PWMC Ch %u (pwm_ch=%u): CMR=0x%08lx (wrote 0x%08lx) CPRD=%lu (wrote %lu)",
+					 ch, pwm_ch, (unsigned long)cmr_read, (unsigned long)cmr,
+					 (unsigned long)cprd_read, (unsigned long)period);
 
 				/* Re-enable channel */
 				pwm_putreg(base + PWM_ENA_OFFSET, (1 << pwm_ch));
