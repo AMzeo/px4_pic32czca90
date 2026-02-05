@@ -37,23 +37,30 @@
  *
  * PWMC provides 4 independent channels per module (PWM0, PWM1).
  * Each channel has:
- * - CPRD: Period register (determines PWM frequency)
+ * - CPRD: Period register (16-bit, determines PWM frequency)
  * - CDTY: Duty cycle register
  * - CDTYUPD: Duty cycle update register (glitch-free updates)
  *
- * Clock configuration:
+ * Clock configuration (dynamic prescaler selection):
  * - MCK = 150MHz
- * - CPRE = 3 (MCK/8 = 18.75MHz)
- * - For 400Hz: CPRD = 18750000/400 = 46875
+ * - For rates >= 286 Hz: CPRE = 3 (MCK/8 = 18.75MHz)
+ * - For rates < 286 Hz:  CPRE = 6 (MCK/64 = 2.34MHz)
  *
- * Pin mapping (Option A):
- * - Motor 1 (CH3): PA7  - GPIO_PWMC0_H3 (Peripheral B)
+ * CPRD register is 16-bit (max 65535), so prescaler must be selected
+ * based on the target rate to prevent overflow:
+ *   400 Hz @ MCK/8:  period = 46875  (fits)
+ *   50 Hz  @ MCK/64: period = 46875  (fits)
+ *   50 Hz  @ MCK/8:  period = 375000 (OVERFLOW - won't work!)
+ *
+ * Pin mapping:
+ * - Motor 1 (CH3): PC13 - GPIO_PWMC0_H3 (Peripheral B) - was PA7, moved due to XIN32 conflict
  * - Motor 2 (CH1): PA2  - GPIO_PWMC0_H1 (Peripheral A)
  * - Motor 3 (CH2): PC19 - GPIO_PWMC0_H2 (Peripheral B)
  * - Motor 4 (CH0): PB0  - GPIO_PWMC0_H0 (Peripheral A)
  */
 
 #include <px4_platform_common/px4_config.h>
+#include <px4_platform_common/log.h>
 #include <nuttx/arch.h>
 #include <nuttx/irq.h>
 
@@ -94,26 +101,51 @@
 #define PWM_SR_OFFSET       0x00C   /* Status Register */
 
 /* Clock configuration:
- * MCK = 150MHz, using CPRE=3 (MCK/8) gives 18.75MHz PWM clock
- * For 400Hz PWM: CPRD = 18750000 / 400 = 46875
+ * MCK = 150MHz
+ *
+ * CPRD register is 16-bit (max 65535), so prescaler must be chosen based on rate:
+ *   - For rates >= 286 Hz: MCK/8  (18.75 MHz) → CPRD fits in 16-bit
+ *   - For rates < 286 Hz:  MCK/64 (2.34 MHz)  → CPRD fits in 16-bit
+ *
+ * Example calculations:
+ *   400 Hz @ MCK/8:  18750000 / 400 = 46875  ✓ fits
+ *   50 Hz  @ MCK/8:  18750000 / 50  = 375000 ✗ OVERFLOW!
+ *   50 Hz  @ MCK/64: 2343750  / 50  = 46875  ✓ fits
  */
 #define PWM_DEFAULT_RATE        400
-#define PWM_CLOCK_DIVIDER       8       /* CPRE = 3 means MCK/8 */
 #define MCK_FREQUENCY           150000000UL
-#define PWM_CLOCK_FREQ          (MCK_FREQUENCY / PWM_CLOCK_DIVIDER)
+#define CPRD_MAX                65535       /* 16-bit register max */
+
+/* Prescaler options (CPRE field in CMR register) */
+#define PWM_CPRE_MCK8           3           /* MCK/8  = 18.75 MHz */
+#define PWM_CPRE_MCK64          6           /* MCK/64 = 2.34375 MHz */
+
+#define PWM_CLK_MCK8            (MCK_FREQUENCY / 8)     /* 18,750,000 Hz */
+#define PWM_CLK_MCK64           (MCK_FREQUENCY / 64)    /* 2,343,750 Hz */
+
+/* Threshold rate: below this, use MCK/64; at or above, use MCK/8
+ * MCK/8 minimum rate = 18750000 / 65535 = 286.10 Hz
+ * At 286 Hz: CPRD = 65559 > 65535 (overflow!)
+ * At 287 Hz: CPRD = 65331 < 65535 (fits)
+ * Compute dynamically to avoid hard-coding errors.
+ */
+#define PWM_RATE_THRESHOLD      ((PWM_CLK_MCK8 / CPRD_MAX) + 1)  /* = 287 */
 
 /* Channel Mode Register (CMR) settings:
- * CPRE = 3: MCK/8 prescaler
+ * CPRE: Selected dynamically based on rate
  * CALG = 0: Left-aligned (edge-aligned)
  * CPOL = 1: Output starts high, goes low at duty match (normal polarity for ESCs)
  */
-#define PWM_CMR_CPRE_MCK8       (3 << 0)    /* CPRE = 3 for MCK/8 */
+#define PWM_CMR_CPRE_SHIFT      0
+#define PWM_CMR_CPRE_MASK       (0xF << PWM_CMR_CPRE_SHIFT)
 #define PWM_CMR_CPOL            (1 << 9)    /* Channel polarity: high at start */
 
 /* Channel state tracking */
 static io_timer_channel_mode_t g_channel_modes[MAX_TIMER_IO_CHANNELS];
 static bool g_timers_initialized[MAX_IO_TIMERS];
 static uint32_t g_timer_period[MAX_IO_TIMERS];  /* CPRD value for each timer */
+static uint32_t g_timer_clock[MAX_IO_TIMERS];   /* Clock frequency for each timer */
+static uint8_t  g_timer_cpre[MAX_IO_TIMERS];    /* Prescaler (CPRE) for each timer */
 
 /* Enable peripheral clock for PWMC module via PMC
  * PWM0: PID 31 -> PCER0 bit 31
@@ -188,6 +220,24 @@ static inline uint32_t pwm_ch_getreg(uint32_t ch_base, uint32_t offset)
 }
 
 /**
+ * Select appropriate prescaler for requested rate
+ * Returns prescaler value (CPRE) and sets clock frequency
+ */
+static uint8_t select_prescaler_for_rate(unsigned rate, uint32_t *clock_freq)
+{
+	if (rate >= PWM_RATE_THRESHOLD) {
+		/* High rate: use MCK/8 for better resolution */
+		*clock_freq = PWM_CLK_MCK8;
+		return PWM_CPRE_MCK8;
+
+	} else {
+		/* Low rate (< 286 Hz): use MCK/64 to fit in 16-bit CPRD */
+		*clock_freq = PWM_CLK_MCK64;
+		return PWM_CPRE_MCK64;
+	}
+}
+
+/**
  * Initialize a timer block (PWMC module)
  */
 int io_timer_init_timer(unsigned timer)
@@ -203,8 +253,15 @@ int io_timer_init_timer(unsigned timer)
 	/* Enable peripheral clock for this PWMC module */
 	enable_pwm_clock(timer);
 
+	/* Select prescaler for default rate (400Hz uses MCK/8) */
+	g_timer_cpre[timer] = select_prescaler_for_rate(PWM_DEFAULT_RATE, &g_timer_clock[timer]);
+
 	/* Set default period for 400Hz PWM */
-	g_timer_period[timer] = PWM_CLOCK_FREQ / PWM_DEFAULT_RATE;
+	g_timer_period[timer] = g_timer_clock[timer] / PWM_DEFAULT_RATE;
+
+	PX4_INFO("PWMC Timer %u init: rate=%uHz cpre=%u clk=%luHz period=%lu",
+		 timer, PWM_DEFAULT_RATE, g_timer_cpre[timer],
+		 (unsigned long)g_timer_clock[timer], (unsigned long)g_timer_period[timer]);
 
 	g_timers_initialized[timer] = true;
 
@@ -255,13 +312,14 @@ int io_timer_channel_init(unsigned channel, io_timer_channel_mode_t mode,
 		pwm_putreg(base + PWM_DIS_OFFSET, (1 << pwm_ch));
 
 		/* Configure Channel Mode Register:
-		 * - CPRE = 3 (MCK/8 = 18.75MHz)
+		 * - CPRE: Selected prescaler for current rate
 		 * - CALG = 0 (left-aligned)
 		 * - CPOL = 1 (high at period start, low at duty match)
 		 */
-		pwm_ch_putreg(ch_base, PWM_CMR_OFFSET, PWM_CMR_CPRE_MCK8 | PWM_CMR_CPOL);
+		uint32_t cmr = (g_timer_cpre[timer_idx] << PWM_CMR_CPRE_SHIFT) | PWM_CMR_CPOL;
+		pwm_ch_putreg(ch_base, PWM_CMR_OFFSET, cmr);
 
-		/* Set period (CPRD register) */
+		/* Set period (CPRD register) - use direct register while channel disabled */
 		pwm_ch_putreg(ch_base, PWM_CPRD_OFFSET, g_timer_period[timer_idx]);
 
 		/* Set initial duty cycle to 0 (CDTY register)
@@ -269,6 +327,9 @@ int io_timer_channel_init(unsigned channel, io_timer_channel_mode_t mode,
 		 * For motor safety, we want 0 duty initially
 		 */
 		pwm_ch_putreg(ch_base, PWM_CDTY_OFFSET, 0);
+
+		PX4_DEBUG("PWMC Ch %u: cmr=0x%08lx cprd=%lu cdty=0",
+			  channel, (unsigned long)cmr, (unsigned long)g_timer_period[timer_idx]);
 
 		/* Enable channel (write to ENA register) */
 		pwm_putreg(base + PWM_ENA_OFFSET, (1 << pwm_ch));
@@ -281,6 +342,10 @@ int io_timer_channel_init(unsigned channel, io_timer_channel_mode_t mode,
 
 /**
  * Set PWM rate (frequency) for a timer
+ *
+ * This function handles prescaler selection to ensure the period fits in the
+ * 16-bit CPRD register. When changing prescaler, channels must be disabled
+ * and re-enabled for the CMR change to take effect.
  */
 int io_timer_set_rate(unsigned timer, unsigned rate)
 {
@@ -292,18 +357,59 @@ int io_timer_set_rate(unsigned timer, unsigned rate)
 		return -EINVAL;
 	}
 
+	/* Select appropriate prescaler for this rate */
+	uint32_t new_clock;
+	uint8_t new_cpre = select_prescaler_for_rate(rate, &new_clock);
+
 	/* Calculate new period */
-	uint32_t period = PWM_CLOCK_FREQ / rate;
+	uint32_t period = new_clock / rate;
+
+	/* Sanity check: period must fit in 16-bit register */
+	if (period > CPRD_MAX) {
+		PX4_ERR("PWMC Timer %u: period %lu overflow for rate %u (cpre=%u clk=%lu)",
+			timer, (unsigned long)period, rate, new_cpre, (unsigned long)new_clock);
+		return -EINVAL;
+	}
+
+	bool prescaler_changed = (new_cpre != g_timer_cpre[timer]);
+
+	/* Store new values */
+	g_timer_clock[timer] = new_clock;
+	g_timer_cpre[timer] = new_cpre;
 	g_timer_period[timer] = period;
 
-	/* Update CPRD for all channels using this timer
-	 * Use CPRDUPD for glitch-free update (takes effect at next period boundary)
-	 */
+	PX4_INFO("PWMC Timer %u: rate=%uHz cpre=%u clk=%luHz period=%lu%s",
+		 timer, rate, new_cpre, (unsigned long)new_clock, (unsigned long)period,
+		 prescaler_changed ? " (prescaler changed)" : "");
+
+	uint32_t base = get_pwm_base(timer);
+
+	/* Update all channels using this timer */
 	for (unsigned ch = 0; ch < MAX_TIMER_IO_CHANNELS; ch++) {
 		if (timer_io_channels[ch].timer_index == timer &&
 		    g_channel_modes[ch] == IOTimerChanMode_PWMOut) {
+
+			uint8_t pwm_ch = timer_io_channels[ch].timer_channel;
 			uint32_t ch_base = get_channel_reg_base(ch);
-			pwm_ch_putreg(ch_base, PWM_CPRDUPD_OFFSET, period);
+
+			if (prescaler_changed) {
+				/* Prescaler changed: must disable channel, update CMR, re-enable */
+				pwm_putreg(base + PWM_DIS_OFFSET, (1 << pwm_ch));
+
+				/* Update CMR with new prescaler */
+				uint32_t cmr = (new_cpre << PWM_CMR_CPRE_SHIFT) | PWM_CMR_CPOL;
+				pwm_ch_putreg(ch_base, PWM_CMR_OFFSET, cmr);
+
+				/* Write CPRD directly (channel is disabled) */
+				pwm_ch_putreg(ch_base, PWM_CPRD_OFFSET, period);
+
+				/* Re-enable channel */
+				pwm_putreg(base + PWM_ENA_OFFSET, (1 << pwm_ch));
+
+			} else {
+				/* Same prescaler: use buffered update register */
+				pwm_ch_putreg(ch_base, PWM_CPRDUPD_OFFSET, period);
+			}
 		}
 	}
 
@@ -351,13 +457,12 @@ int io_timer_set_ccr(unsigned channel, uint16_t value)
 	}
 
 	uint32_t ch_base = get_channel_reg_base(channel);
-
-	/* Convert microseconds to timer ticks */
-	uint32_t ticks = (uint32_t)value * PWM_CLOCK_FREQ / 1000000UL;
-
-	/* Clamp to period */
 	uint8_t timer_idx = timer_io_channels[channel].timer_index;
 
+	/* Convert microseconds to timer ticks using current clock frequency */
+	uint32_t ticks = (uint32_t)value * g_timer_clock[timer_idx] / 1000000UL;
+
+	/* Clamp to period */
 	if (ticks > g_timer_period[timer_idx]) {
 		ticks = g_timer_period[timer_idx];
 	}
@@ -380,10 +485,11 @@ uint16_t io_channel_get_ccr(unsigned channel)
 	}
 
 	uint32_t ch_base = get_channel_reg_base(channel);
+	uint8_t timer_idx = timer_io_channels[channel].timer_index;
 	uint32_t ticks = pwm_ch_getreg(ch_base, PWM_CDTY_OFFSET);
 
-	/* Convert back to microseconds */
-	return (uint16_t)(ticks * 1000000UL / PWM_CLOCK_FREQ);
+	/* Convert back to microseconds using current clock frequency */
+	return (uint16_t)(ticks * 1000000UL / g_timer_clock[timer_idx]);
 }
 
 /**

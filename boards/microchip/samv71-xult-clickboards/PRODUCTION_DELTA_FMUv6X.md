@@ -1,5 +1,73 @@
 # Production Delta: SAMV71-XULT vs STM32 FMUv6X
 
+## Master Feature List
+
+### ✅ Implemented (Working)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| **Core Flight Stack** | ✅ | Commander, EKF2, Navigator, MC control |
+| **PWM Output (4 channels)** | ✅ | PWMC-based, 286-400 Hz |
+| **IMU (ICM20689)** | ✅ | SPI on EXT1 header |
+| **Barometer (BMP388)** | ✅ | SPI on EXT2 header |
+| **Magnetometer (AK09915)** | ✅ | I2C on mikroBUS |
+| **GPS** | ✅ | UART2 (USART2) |
+| **Battery Monitoring** | ✅ | AFEC0 CH0 (voltage), CH7 (current) |
+| **Safety Button** | ✅ | PA9 (SW0), active-low |
+| **Safety LED** | ✅ | PC9 (LED1) |
+| **nARMED Output** | ✅ | PA20 |
+| **SD Card** | ✅ | HSMCI0 with card detect (PD18) |
+| **USB CDC/ACM** | ✅ | MAVLink console |
+| **Logger** | ✅ | SD card logging |
+| **Parameters** | ✅ | SD card storage |
+| **MAVLink** | ✅ | USB + UART telemetry |
+| **RC Input (Serial)** | ✅ | UART3 (SBUS/CRSF) |
+| **High-Resolution Timer** | ✅ | TC0 CH0 |
+| **I2C Bus (TWIHS0)** | ✅ | Single bus, all sensors |
+| **SPI Bus (SPI0)** | ✅ | Single bus, IMU + Baro |
+| **Status LED** | ✅ | PA23 (Blue) |
+| **PA7/XIN32 Conflict** | ✅ | FIXED - Motor 1 on PC13 |
+
+### ❌ Not Implemented (Pending)
+
+| Feature | Priority | Hours | Blocker? |
+|---------|----------|-------|----------|
+| **DShot Output** | Must-Have | 60-80 | Yes |
+| **PWM 50 Hz (Servos)** | Must-Have | 8-12 | Yes |
+| **PWM Capture (RC PPM)** | Must-Have | 16-24 | Yes |
+| **IO Timer Allocation API** | Must-Have | 20-30 | Yes |
+| **OneShot125/42** | Must-Have | Incl. in DShot | Yes |
+| **PWM Channels 5-8** | Should-Have | 16-24 | No |
+| **EEPROM/FRAM Params** | Should-Have | 16-24 | No |
+| **Power Rail Control** | Should-Have | 8-12 | No |
+| **USB Valid Detect** | Should-Have | 4-8 | No |
+| **5V Peripheral Enable** | Should-Have | 4-8 | No |
+| **ADC Rail Monitoring** | Should-Have | 8-12 | No |
+| **Second IMU** | Should-Have | 16-24 | No |
+| **Second Barometer** | Should-Have | 8-12 | No |
+| **Heater Control** | Should-Have | 4-8 | No |
+| **USB Bootloader (PX4-style)** | Should-Have | 40-80 | No |
+| **Camera Trigger** | Nice-to-Have | 4-8 | No |
+| **Buzzer/Tone Alarm** | Nice-to-Have | 4-8 | No |
+| **LED Strip** | Nice-to-Have | 8-12 | No |
+| **CAN Bus Validation** | Nice-to-Have | 8-16 | No |
+| **Ethernet** | N/A | - | HW missing |
+| **PX4IO Co-processor** | N/A | - | HW missing |
+
+### ⚠️ Partial / Needs Work
+
+| Feature | Status | Issue |
+|---------|--------|-------|
+| **RC Input** | ⚠️ Partial | Serial only, no PPM/PWM capture |
+| **SD Card Detect** | ⚠️ Conflict | PD18 conflicts with TC5 (RC capture) |
+| **CAN Bus** | ⚠️ Untested | Hardware present, driver not validated |
+| **QSPI Flash** | ⚠️ Planned | 8MB on board, not implemented |
+| **Safety Button** | ⚠️ Conflict | PA9 conflicts with UART0_RXD |
+| **Motor 4 (PB0)** | ⚠️ Conflict | Conflicts with UART0_TXD |
+| **USB Bootloader** | ⚠️ SAM-BA only | ROM bootloader works, PX4-style not implemented |
+
+---
+
 ## Executive Summary
 
 This document provides a comprehensive comparison between the SAMV71-XULT-Clickboards development board implementation and the production-ready STM32 FMUv6X platform. The SAMV71 implementation is suitable for **evaluation and prototyping** but requires significant work for production deployment.
@@ -276,32 +344,56 @@ This document provides a comprehensive comparison between the SAMV71-XULT-Clickb
 | **Hardware** | Add second IMU (SPI) + second baro (I2C/SPI) |
 | **Effort** | 16-24 hours |
 
+#### 12. USB Bootloader
+
+| Aspect | Details |
+|--------|---------|
+| **Goal** | PX4-compatible firmware update via USB (like FMUv6X) |
+| **Current state** | SAM-BA ROM bootloader available (ERASE+RESET → bossac) |
+| **Option A** | **PX4-style USB bootloader** (production-grade) |
+| | New files: `boards/microchip/samv71-xult-clickboards/bootloader.px4board` |
+| | `boards/microchip/samv71-xult-clickboards/src/bootloader_main.c` |
+| | `boards/microchip/samv71-xult-clickboards/src/hw_config.h` |
+| | USB DFU or CDC-based PX4 bootloader protocol |
+| | Flash layout: reserve first sector(s) for bootloader |
+| | Update linker scripts (bootloader + app) |
+| | Pros: Works with PX4 uploader, versioning, safety checks |
+| | Cons: 40-80 hours development, ongoing maintenance |
+| **Option B** | **SAM-BA ROM bootloader** (evaluation/prototype) |
+| | Document ERASE+RESET procedure in README |
+| | Provide bossac/SAM-BA CLI command examples |
+| | Keep app linker at standard flash start |
+| | Pros: Zero development, proven ROM code |
+| | Cons: Not PX4 uploader compatible, manual steps |
+| **Recommendation** | Use SAM-BA for prototyping, implement PX4 bootloader for production |
+| **Effort** | Option A: 40-80 hours, Option B: 2-4 hours (docs only) |
+
 ---
 
 ### 2.3 Nice-to-Have
 
-#### 12. Camera Trigger/Capture
+#### 13. Camera Trigger/Capture
 
 | Aspect | Details |
 |--------|---------|
 | **Goal** | GPIO trigger + timer capture for camera sync |
 | **Effort** | 4-8 hours |
 
-#### 13. Tone Alarm/Buzzer
+#### 14. Tone Alarm/Buzzer
 
 | Aspect | Details |
 |--------|---------|
 | **Goal** | PWM or GPIO toggle for audio feedback |
 | **Effort** | 4-8 hours |
 
-#### 14. LED Strip Support
+#### 15. LED Strip Support
 
 | Aspect | Details |
 |--------|---------|
 | **Goal** | SPI or timer-based LED strip driver |
 | **Effort** | 8-12 hours |
 
-#### 15. Ethernet
+#### 16. Ethernet
 
 | Aspect | Details |
 |--------|---------|
@@ -315,9 +407,9 @@ This document provides a comprehensive comparison between the SAMV71-XULT-Clickb
 | Category | Items | Hours |
 |----------|-------|-------|
 | **Must-Have** | 1-6 | 108-154 |
-| **Should-Have** | 7-11 | 64-96 |
-| **Nice-to-Have** | 12-14 | 16-28 |
-| **Total** | | **188-278** |
+| **Should-Have** | 7-12 | 104-176 |
+| **Nice-to-Have** | 13-15 | 16-28 |
+| **Total** | | **228-358** |
 
 ### Must-Have Breakdown
 
@@ -339,6 +431,7 @@ This document provides a comprehensive comparison between the SAMV71-XULT-Clickb
 | 9. Power rail control | 8-12 |
 | 10. ADC expansion | 8-12 |
 | 11. Sensor redundancy | 16-24 |
+| 12. USB bootloader (PX4-style) | 40-80 |
 
 ---
 
@@ -481,6 +574,6 @@ The SAMV71-XULT is **suitable** for:
 
 ---
 
-*Document Version: 2.1*
+*Document Version: 2.3*
 *Date: 2025*
-*Format: Production-parity implementation checklist*
+*Format: Master feature list + Production-parity implementation checklist*
