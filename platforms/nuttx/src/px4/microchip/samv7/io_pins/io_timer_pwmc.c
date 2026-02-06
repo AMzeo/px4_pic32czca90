@@ -534,15 +534,21 @@ int io_timer_set_ccr(unsigned channel, uint16_t value)
 		uint32_t base = get_pwm_base(timer_idx);
 		uint32_t sr = pwm_getreg(base + PWM_SR_OFFSET);           /* Channel enabled? */
 		uint32_t scm = pwm_getreg(base + 0x020);                  /* PWM_SCM: Sync mode */
-		uint32_t scuc = pwm_getreg(base + 0x028);                 /* PWM_SCUC: Update control */
 		uint32_t cdty = pwm_ch_getreg(ch_base, PWM_CDTY_OFFSET);  /* Current duty */
 		uint8_t pwm_ch = timer_io_channels[channel].timer_channel;
 
+		/* Also check output override/fault registers */
+		uint32_t os = pwm_getreg(base + 0x048);    /* PWM_OS: Output Selection */
+		uint32_t oov = pwm_getreg(base + 0x044);   /* PWM_OOV: Output Override Value */
+		uint32_t fpe = pwm_getreg(base + 0x06C);   /* PWM_FPE: Fault Protection Enable */
+
 		PX4_INFO("PWMC Ch %u (pwm_ch=%u): set_ccr %uus -> %lu ticks",
 			 channel, pwm_ch, value, (unsigned long)ticks);
-		PX4_INFO("  SR=0x%08lx (ch%u enabled=%d) SCM=0x%08lx SCUC=0x%08lx CDTY=%lu",
+		PX4_INFO("  SR=0x%08lx (ch%u ena=%d) SCM=0x%08lx CDTY=%lu",
 			 (unsigned long)sr, pwm_ch, (sr & (1 << pwm_ch)) ? 1 : 0,
-			 (unsigned long)scm, (unsigned long)scuc, (unsigned long)cdty);
+			 (unsigned long)scm, (unsigned long)cdty);
+		PX4_INFO("  OS=0x%08lx OOV=0x%08lx FPE=0x%08lx",
+			 (unsigned long)os, (unsigned long)oov, (unsigned long)fpe);
 
 		last_ticks[channel] = ticks;
 	}
