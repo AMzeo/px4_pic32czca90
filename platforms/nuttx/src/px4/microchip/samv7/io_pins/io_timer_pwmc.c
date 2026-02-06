@@ -522,19 +522,28 @@ int io_timer_set_ccr(unsigned channel, uint16_t value)
 		ticks = g_timer_period[timer_idx];
 	}
 
-	/* Write to CDTY directly for immediate update
-	 * Note: CDTYUPD (buffered) wasn't applying - using direct write instead
+	/* Use CDTYUPD for glitch-free update (datasheet-correct for enabled channels)
+	 * Per DS60001527J 50.6.6.3: updates via CDTYUPD while channel enabled
 	 */
-	pwm_ch_putreg(ch_base, PWM_CDTY_OFFSET, ticks);
+	pwm_ch_putreg(ch_base, PWM_CDTYUPD_OFFSET, ticks);
 
-	/* Debug: log pulse width changes and verify register */
+	/* Debug: diagnose why CDTYUPD might not be applying */
 	static uint32_t last_ticks[MAX_TIMER_IO_CHANNELS] = {0};
 
 	if (ticks != last_ticks[channel]) {
-		uint32_t cdty_read = pwm_ch_getreg(ch_base, PWM_CDTY_OFFSET);
-		PX4_INFO("PWMC Ch %u: set_ccr %uus -> %lu ticks (CDTY read=%lu, period=%lu)",
-			 channel, value, (unsigned long)ticks, (unsigned long)cdty_read,
-			 (unsigned long)g_timer_period[timer_idx]);
+		uint32_t base = get_pwm_base(timer_idx);
+		uint32_t sr = pwm_getreg(base + PWM_SR_OFFSET);           /* Channel enabled? */
+		uint32_t scm = pwm_getreg(base + 0x020);                  /* PWM_SCM: Sync mode */
+		uint32_t scuc = pwm_getreg(base + 0x028);                 /* PWM_SCUC: Update control */
+		uint32_t cdty = pwm_ch_getreg(ch_base, PWM_CDTY_OFFSET);  /* Current duty */
+		uint8_t pwm_ch = timer_io_channels[channel].timer_channel;
+
+		PX4_INFO("PWMC Ch %u (pwm_ch=%u): set_ccr %uus -> %lu ticks",
+			 channel, pwm_ch, value, (unsigned long)ticks);
+		PX4_INFO("  SR=0x%08lx (ch%u enabled=%d) SCM=0x%08lx SCUC=0x%08lx CDTY=%lu",
+			 (unsigned long)sr, pwm_ch, (sr & (1 << pwm_ch)) ? 1 : 0,
+			 (unsigned long)scm, (unsigned long)scuc, (unsigned long)cdty);
+
 		last_ticks[channel] = ticks;
 	}
 
