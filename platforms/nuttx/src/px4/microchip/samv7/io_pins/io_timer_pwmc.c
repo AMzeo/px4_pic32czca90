@@ -522,17 +522,19 @@ int io_timer_set_ccr(unsigned channel, uint16_t value)
 		ticks = g_timer_period[timer_idx];
 	}
 
-	/* Use CDTYUPD for glitch-free update (Harmony CSP pattern)
-	 * The new duty value takes effect at the next period boundary
+	/* Write to CDTY directly for immediate update
+	 * Note: CDTYUPD (buffered) wasn't applying - using direct write instead
 	 */
-	pwm_ch_putreg(ch_base, PWM_CDTYUPD_OFFSET, ticks);
+	pwm_ch_putreg(ch_base, PWM_CDTY_OFFSET, ticks);
 
-	/* Debug: log pulse width changes */
+	/* Debug: log pulse width changes and verify register */
 	static uint32_t last_ticks[MAX_TIMER_IO_CHANNELS] = {0};
 
 	if (ticks != last_ticks[channel]) {
-		PX4_INFO("PWMC Ch %u: set_ccr %uus -> %lu ticks (period=%lu)",
-			 channel, value, (unsigned long)ticks, (unsigned long)g_timer_period[timer_idx]);
+		uint32_t cdty_read = pwm_ch_getreg(ch_base, PWM_CDTY_OFFSET);
+		PX4_INFO("PWMC Ch %u: set_ccr %uus -> %lu ticks (CDTY read=%lu, period=%lu)",
+			 channel, value, (unsigned long)ticks, (unsigned long)cdty_read,
+			 (unsigned long)g_timer_period[timer_idx]);
 		last_ticks[channel] = ticks;
 	}
 
