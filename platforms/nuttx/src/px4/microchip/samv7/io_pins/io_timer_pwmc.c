@@ -527,6 +527,15 @@ int io_timer_set_ccr(unsigned channel, uint16_t value)
 	 */
 	pwm_ch_putreg(ch_base, PWM_CDTYUPD_OFFSET, ticks);
 
+	/* Debug: log pulse width changes */
+	static uint32_t last_ticks[MAX_TIMER_IO_CHANNELS] = {0};
+
+	if (ticks != last_ticks[channel]) {
+		PX4_INFO("PWMC Ch %u: set_ccr %uus -> %lu ticks (period=%lu)",
+			 channel, value, (unsigned long)ticks, (unsigned long)g_timer_period[timer_idx]);
+		last_ticks[channel] = ticks;
+	}
+
 	return OK;
 }
 
