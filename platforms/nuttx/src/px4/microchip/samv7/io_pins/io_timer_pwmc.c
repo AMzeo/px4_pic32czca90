@@ -498,6 +498,9 @@ int io_timer_set_enable(bool state, io_timer_channel_mode_t mode,
 /**
  * Set PWM duty cycle (CCR = Compare Capture Register, here CDTY)
  * Value is in microseconds (1000-2000 typical for servos/ESCs)
+ *
+ * DIAGNOSTIC VERSION: Uses CDTYUPD with extensive diagnostics including
+ * counter verification to determine why physical output doesn't change.
  */
 int io_timer_set_ccr(unsigned channel, uint16_t value)
 {
@@ -511,6 +514,8 @@ int io_timer_set_ccr(unsigned channel, uint16_t value)
 
 	uint32_t ch_base = get_channel_reg_base(channel);
 	uint8_t timer_idx = timer_io_channels[channel].timer_index;
+	uint8_t pwm_ch = timer_io_channels[channel].timer_channel;
+	uint32_t base = get_pwm_base(timer_idx);
 
 	/* Convert microseconds to timer ticks using current clock frequency
 	 * Use uint64_t to prevent overflow: 2000 * 2343750 > uint32_t max!
@@ -522,33 +527,73 @@ int io_timer_set_ccr(unsigned channel, uint16_t value)
 		ticks = g_timer_period[timer_idx];
 	}
 
-	/* Use CDTYUPD for glitch-free update (datasheet-correct for enabled channels)
-	 * Per DS60001527J 50.6.6.3: updates via CDTYUPD while channel enabled
+	/* Try BOTH: write to CDTYUPD and also directly to CDTY
+	 * CDTYUPD should apply at next period boundary
+	 * CDTY direct write while channel is momentarily disabled forces immediate update
 	 */
+
+	/* First, write to CDTYUPD for buffered update */
 	pwm_ch_putreg(ch_base, PWM_CDTYUPD_OFFSET, ticks);
 
-	/* Debug: diagnose why CDTYUPD might not be applying */
+	/* Also try direct CDTY write with brief disable/enable */
+	pwm_putreg(base + PWM_DIS_OFFSET, (1 << pwm_ch));
+	up_udelay(5);
+	pwm_ch_putreg(ch_base, PWM_CDTY_OFFSET, ticks);
+	pwm_putreg(base + PWM_ENA_OFFSET, (1 << pwm_ch));
+
+	/* Debug: diagnose the duty cycle update */
 	static uint32_t last_ticks[MAX_TIMER_IO_CHANNELS] = {0};
 
 	if (ticks != last_ticks[channel]) {
-		uint32_t base = get_pwm_base(timer_idx);
 		uint32_t sr = pwm_getreg(base + PWM_SR_OFFSET);           /* Channel enabled? */
 		uint32_t scm = pwm_getreg(base + 0x020);                  /* PWM_SCM: Sync mode */
 		uint32_t cdty = pwm_ch_getreg(ch_base, PWM_CDTY_OFFSET);  /* Current duty */
-		uint8_t pwm_ch = timer_io_channels[channel].timer_channel;
+		uint32_t cprd = pwm_ch_getreg(ch_base, PWM_CPRD_OFFSET);  /* Period */
+		uint32_t cmr = pwm_ch_getreg(ch_base, PWM_CMR_OFFSET);    /* Channel mode */
+
+		/* Read CCNT (Channel Counter) to verify counter is running */
+		uint32_t ccnt1 = pwm_ch_getreg(ch_base, PWM_CCNT_OFFSET);
+		up_udelay(100);  /* 100us delay */
+		uint32_t ccnt2 = pwm_ch_getreg(ch_base, PWM_CCNT_OFFSET);
+		up_udelay(100);
+		uint32_t ccnt3 = pwm_ch_getreg(ch_base, PWM_CCNT_OFFSET);
+
+		/* Check dead-time register - DTH/DTL could affect output */
+		uint32_t dt = pwm_ch_getreg(ch_base, PWM_CMR_OFFSET + 0x18);  /* PWM_DT offset from CMR */
 
 		/* Also check output override/fault registers */
 		uint32_t os = pwm_getreg(base + 0x048);    /* PWM_OS: Output Selection */
 		uint32_t oov = pwm_getreg(base + 0x044);   /* PWM_OOV: Output Override Value */
 		uint32_t fpe = pwm_getreg(base + 0x06C);   /* PWM_FPE: Fault Protection Enable */
+		uint32_t fsr = pwm_getreg(base + 0x060);   /* PWM_FSR: Fault Status */
 
 		PX4_INFO("PWMC Ch %u (pwm_ch=%u): set_ccr %uus -> %lu ticks",
 			 channel, pwm_ch, value, (unsigned long)ticks);
-		PX4_INFO("  SR=0x%08lx (ch%u ena=%d) SCM=0x%08lx CDTY=%lu",
+		PX4_INFO("  CDTY=%lu CPRD=%lu CMR=0x%08lx",
+			 (unsigned long)cdty, (unsigned long)cprd, (unsigned long)cmr);
+		PX4_INFO("  CMR decode: cpre=%lu calg=%d cpol=%d upds=%d dte=%d",
+			 (unsigned long)(cmr & 0xF),
+			 (cmr & (1 << 8)) ? 1 : 0,   /* CALG: alignment */
+			 (cmr & (1 << 9)) ? 1 : 0,   /* CPOL: polarity */
+			 (cmr & (1 << 11)) ? 1 : 0,  /* UPDS: update selection */
+			 (cmr & (1 << 16)) ? 1 : 0); /* DTE: dead-time enable */
+		PX4_INFO("  CCNT: %lu -> %lu -> %lu (counter %s)",
+			 (unsigned long)ccnt1, (unsigned long)ccnt2, (unsigned long)ccnt3,
+			 (ccnt1 != ccnt2 || ccnt2 != ccnt3) ? "RUNNING" : "STUCK!");
+		PX4_INFO("  SR=0x%08lx (ch%u ena=%d) SCM=0x%08lx DT=0x%08lx",
 			 (unsigned long)sr, pwm_ch, (sr & (1 << pwm_ch)) ? 1 : 0,
-			 (unsigned long)scm, (unsigned long)cdty);
-		PX4_INFO("  OS=0x%08lx OOV=0x%08lx FPE=0x%08lx",
-			 (unsigned long)os, (unsigned long)oov, (unsigned long)fpe);
+			 (unsigned long)scm, (unsigned long)dt);
+		PX4_INFO("  OS=0x%08lx OOV=0x%08lx FPE=0x%08lx FSR=0x%08lx",
+			 (unsigned long)os, (unsigned long)oov, (unsigned long)fpe,
+			 (unsigned long)fsr);
+
+		/* Calculate expected duty percentage for verification */
+		if (cprd > 0) {
+			uint32_t duty_pct = (cdty * 100) / cprd;
+			uint32_t pulse_us = (uint64_t)cdty * 1000000ULL / g_timer_clock[timer_idx];
+			PX4_INFO("  Expected: %lu%% duty, %luus pulse width",
+				 (unsigned long)duty_pct, (unsigned long)pulse_us);
+		}
 
 		last_ticks[channel] = ticks;
 	}
