@@ -1,8 +1,14 @@
 # SAMV71-XULT PX4 Flight Controller Port
 
-**Status:** 75% Production Ready | **Last Updated:** 2025-12-06
+**Status:** Prototype Working — Production Buildout In Progress | **Last Updated:** 2026-02-08
 
 PX4 Autopilot port for the Microchip SAMV71-XULT evaluation board with Click sensor boards.
+
+---
+
+## Production Plan
+
+> **[PRODUCTION_PLAN.md](PRODUCTION_PLAN.md)** — Full implementation plan covering IO Timer Allocation API, DShot output, Input Capture, Production Hardening, and Custom PCB phases.
 
 ---
 
@@ -10,8 +16,8 @@ PX4 Autopilot port for the Microchip SAMV71-XULT evaluation board with Click sen
 
 | Document | Description |
 |----------|-------------|
-| [Production Readiness](PRODUCTION_READINESS.md) | Full gap analysis and roadmap to production |
-| [Team Development Plan](TEAM_DEVELOPMENT_PLAN.md) | Multi-developer task breakdown for first flight |
+| **[Production Plan](PRODUCTION_PLAN.md)** | **Active implementation roadmap (Phases 0–7)** |
+| [Production Delta vs FMUv6X](PRODUCTION_DELTA_FMUv6X.md) | Gap analysis against FMUv6X reference |
 | [Feature Status](FEATURE_STATUS.md) | Current feature implementation status |
 
 ---
@@ -40,25 +46,28 @@ PX4 Autopilot port for the Microchip SAMV71-XULT evaluation board with Click sen
 
 ### Working
 - Full PX4 stack boot and operation
-- HITL simulation with jMAVSim
+- 4-channel PWMC PWM output (50–400Hz, dynamic prescaler)
+- IMU, Barometer, Magnetometer sensors
+- GPS serial input
+- Battery ADC monitoring
+- Safety button
 - USB CDC/ACM console and MAVLink
 - SD card storage (params, logs)
-- SPI and I2C sensor communication
-- 3 PWM output channels
-- RC input processing
+- RC serial input
+- HRT (high-resolution timer)
 - EKF2 state estimation
 - Multicopter flight control stack
 
-### In Progress
-- [HITL Sensor Processing](HITL_SENSOR_PROCESSING_ISSUE.md) - Simulation baro not reaching EKF
-- [updateSubscriptions Fix](UPDATESUBSCRIPTIONS_DEBUG.md) - Runtime init fix applied
+### In Progress (Production Plan)
+- IO Timer Allocation API (Phase 1)
+- DShot ESC protocol (Phase 2)
+- TC-based Input Capture for RC PPM (Phase 3)
+- Production hardening — fault protection, watchdog (Phase 4)
 
-### Not Yet Implemented
-- ADC (battery monitoring)
-- 4th PWM channel (needed for quadcopter)
-- DShot ESC protocol
-- Watchdog timer
-- Bootloader
+### Planned (Custom PCB)
+- 8-channel PWM (Phase 5)
+- Extended ADC & power monitoring (Phase 6)
+- HW versioning & FRAM storage (Phase 7)
 
 ---
 
@@ -93,8 +102,8 @@ picocom -b 115200 /dev/ttyACM0
 ### Planning & Status
 | Document | Purpose |
 |----------|---------|
-| [Production Readiness](PRODUCTION_READINESS.md) | Gap analysis, priority list, effort estimates |
-| [Team Development Plan](TEAM_DEVELOPMENT_PLAN.md) | 4-developer parallel work plan |
+| **[Production Plan](PRODUCTION_PLAN.md)** | **Active roadmap: Phases 0–7** |
+| [Production Delta vs FMUv6X](PRODUCTION_DELTA_FMUv6X.md) | Gap analysis against FMUv6X reference |
 | [Feature Status](FEATURE_STATUS.md) | Detailed feature implementation status |
 | [Master Implementation Plan](MASTER_IMPLEMENTATION_PLAN_20251129.md) | Original porting plan |
 
@@ -149,14 +158,7 @@ RAM:      52,444 /   393,216 bytes (13.34%)
 
 ## Contributing
 
-This is an active development port. Key areas needing work:
-
-1. **ADC Driver** - Battery voltage/current sensing
-2. **4th PWM Channel** - Required for quadcopter
-3. **Watchdog Timer** - System reliability
-4. **Bootloader** - Field firmware updates
-
-See [Production Readiness](PRODUCTION_READINESS.md) for full details.
+This is an active development port. See the **[Production Plan](PRODUCTION_PLAN.md)** for the full implementation roadmap and current priorities.
 
 ---
 
