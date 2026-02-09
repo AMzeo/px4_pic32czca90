@@ -143,9 +143,14 @@
 /* Channel state tracking */
 static io_timer_channel_mode_t g_channel_modes[MAX_TIMER_IO_CHANNELS];
 static bool g_timers_initialized[MAX_IO_TIMERS];
+static io_timer_channel_mode_t g_timer_modes[MAX_IO_TIMERS]; /* Mode allocated for each timer */
 static uint32_t g_timer_period[MAX_IO_TIMERS];  /* CPRD value for each timer */
 static uint32_t g_timer_clock[MAX_IO_TIMERS];   /* Clock frequency for each timer */
 static uint8_t  g_timer_cpre[MAX_IO_TIMERS];    /* Prescaler (CPRE) for each timer */
+
+/* Channel handler callbacks (for capture/DShot IRQ dispatch — wired in Phase 1C) */
+static channel_handler_t g_channel_handler_callbacks[MAX_TIMER_IO_CHANNELS];
+static void             *g_channel_handler_contexts[MAX_TIMER_IO_CHANNELS];
 
 /* Enable peripheral clock for PWMC module via PMC
  * PWM0: PID 31 -> PCER0 bit 31
@@ -238,9 +243,47 @@ static uint8_t select_prescaler_for_rate(unsigned rate, uint32_t *clock_freq)
 }
 
 /**
+ * Allocate a timer for a specific mode.
+ * Prevents conflicting modes (e.g., PWM and DShot) on the same PWMC module.
+ */
+int io_timer_allocate_timer(unsigned timer, io_timer_channel_mode_t mode)
+{
+	if (timer >= MAX_IO_TIMERS) {
+		return -EINVAL;
+	}
+
+	irqstate_t flags = enter_critical_section();
+
+	if (g_timers_initialized[timer] && g_timer_modes[timer] != mode) {
+		leave_critical_section(flags);
+		return -EBUSY;
+	}
+
+	g_timer_modes[timer] = mode;
+	leave_critical_section(flags);
+
+	return OK;
+}
+
+/**
+ * Unallocate a timer, allowing reuse for a different mode.
+ */
+int io_timer_unallocate_timer(unsigned timer)
+{
+	if (timer >= MAX_IO_TIMERS) {
+		return -EINVAL;
+	}
+
+	g_timer_modes[timer] = IOTimerChanMode_NotUsed;
+	g_timers_initialized[timer] = false;
+
+	return OK;
+}
+
+/**
  * Initialize a timer block (PWMC module)
  */
-int io_timer_init_timer(unsigned timer)
+int io_timer_init_timer(unsigned timer, io_timer_channel_mode_t mode)
 {
 	if (timer >= MAX_IO_TIMERS) {
 		return -EINVAL;
@@ -248,6 +291,13 @@ int io_timer_init_timer(unsigned timer)
 
 	if (g_timers_initialized[timer]) {
 		return OK;
+	}
+
+	/* Check/set timer allocation */
+	int ret = io_timer_allocate_timer(timer, mode);
+
+	if (ret != OK) {
+		return ret;
 	}
 
 	/* Enable peripheral clock for this PWMC module */
@@ -269,30 +319,42 @@ int io_timer_init_timer(unsigned timer)
 }
 
 /**
- * Initialize a PWM channel
+ * Initialize a PWM channel.
+ *
+ * Allocates the channel, initializes the parent timer block if needed,
+ * configures HW registers, and stores the callback for IRQ dispatch.
  */
 int io_timer_channel_init(unsigned channel, io_timer_channel_mode_t mode,
 			  channel_handler_t channel_handler, void *context)
 {
-	/* channel_handler and context unused until Phase 1C allocation API */
-	UNUSED(channel_handler);
-	UNUSED(context);
-
 	if (channel >= MAX_TIMER_IO_CHANNELS) {
 		return -EINVAL;
 	}
 
-	if (mode != IOTimerChanMode_PWMOut && mode != IOTimerChanMode_NotUsed) {
-		return -EINVAL;  /* Only PWM output supported */
+	if (mode <= IOTimerChanMode_NotUsed || mode >= IOTimerChanModeSize) {
+		return -EINVAL;
 	}
+
+	/* Allocate the channel — returns -EBUSY if already in use */
+	int ret = io_timer_allocate_channel(channel, mode);
+
+	if (ret != OK) {
+		return ret;
+	}
+
+	/* Store channel handler for IRQ dispatch (used by capture/DShot modes) */
+	g_channel_handler_callbacks[channel] = channel_handler;
+	g_channel_handler_contexts[channel] = context;
 
 	uint8_t timer_idx = timer_io_channels[channel].timer_index;
 	uint8_t pwm_ch = timer_io_channels[channel].timer_channel;
 
 	/* Initialize the timer block if needed */
-	int ret = io_timer_init_timer(timer_idx);
+	ret = io_timer_init_timer(timer_idx, mode);
 
 	if (ret != OK) {
+		/* Timer init failed — release the channel allocation */
+		g_channel_modes[channel] = IOTimerChanMode_NotUsed;
 		return ret;
 	}
 
@@ -300,10 +362,12 @@ int io_timer_channel_init(unsigned channel, io_timer_channel_mode_t mode,
 	uint32_t ch_base = get_channel_reg_base(channel);
 
 	if (base == 0 || ch_base == 0) {
+		g_channel_modes[channel] = IOTimerChanMode_NotUsed;
 		return -EINVAL;
 	}
 
-	if (mode == IOTimerChanMode_PWMOut) {
+	switch (mode) {
+	case IOTimerChanMode_PWMOut: {
 		uint32_t gpio = timer_io_channels[channel].gpio_out;
 
 		/* Configure GPIO for PWMC output (peripheral A or B) */
@@ -331,9 +395,62 @@ int io_timer_channel_init(unsigned channel, io_timer_channel_mode_t mode,
 
 		/* Enable channel (write to ENA register) */
 		pwm_putreg(base + PWM_ENA_OFFSET, (1 << pwm_ch));
+		break;
 	}
 
-	g_channel_modes[channel] = mode;
+	case IOTimerChanMode_Dshot:
+	case IOTimerChanMode_DshotInverted:
+		/* DShot HW config done by dshot.c via io_timer_set_dshot_mode().
+		 * Just configure GPIO for peripheral function here.
+		 */
+		sam_configgpio(timer_io_channels[channel].gpio_out);
+		break;
+
+	case IOTimerChanMode_Trigger:
+	case IOTimerChanMode_Other:
+		/* GPIO-only modes — drive pin as output-low until explicitly set.
+		 * No PWMC HW configuration needed.
+		 */
+		sam_configgpio(io_timer_channel_get_gpio_output(channel));
+		break;
+
+	case IOTimerChanMode_Capture:
+	case IOTimerChanMode_PWMIn:
+	case IOTimerChanMode_PPS:
+	case IOTimerChanMode_RPM:
+	case IOTimerChanMode_CaptureDMA:
+		/* TC-based capture modes — HW configured by input_capture.c (Phase 3).
+		 * Channel is just reserved here.
+		 */
+		break;
+
+	case IOTimerChanMode_OneShot:
+		/* Same HW setup as PWMOut; trigger logic handled by io_timer_trigger() */
+		sam_configgpio(timer_io_channels[channel].gpio_out);
+		pwm_putreg(base + PWM_DIS_OFFSET, (1 << pwm_ch));
+
+		uint32_t cmr = (g_timer_cpre[timer_idx] << PWM_CMR_CPRE_SHIFT) | PWM_CMR_CPOL;
+		pwm_ch_putreg(ch_base, PWM_CMR_OFFSET, cmr);
+		pwm_ch_putreg(ch_base, PWM_CPRD_OFFSET, g_timer_period[timer_idx]);
+		pwm_ch_putreg(ch_base, PWM_CDTY_OFFSET, 0);
+		pwm_putreg(base + PWM_ENA_OFFSET, (1 << pwm_ch));
+		break;
+
+	case IOTimerChanMode_LED:
+		/* LED PWM — same PWMC setup as PWMOut */
+		sam_configgpio(timer_io_channels[channel].gpio_out);
+		pwm_putreg(base + PWM_DIS_OFFSET, (1 << pwm_ch));
+
+		uint32_t led_cmr = (g_timer_cpre[timer_idx] << PWM_CMR_CPRE_SHIFT) | PWM_CMR_CPOL;
+		pwm_ch_putreg(ch_base, PWM_CMR_OFFSET, led_cmr);
+		pwm_ch_putreg(ch_base, PWM_CPRD_OFFSET, g_timer_period[timer_idx]);
+		pwm_ch_putreg(ch_base, PWM_CDTY_OFFSET, 0);
+		pwm_putreg(base + PWM_ENA_OFFSET, (1 << pwm_ch));
+		break;
+
+	default:
+		break;
+	}
 
 	return OK;
 }
@@ -434,23 +551,34 @@ int io_timer_set_rate(unsigned timer, unsigned rate)
 }
 
 /**
- * Enable/disable PWM channels
+ * Enable/disable PWM channels.
+ *
+ * When masks == IO_TIMER_ALL_MODES_CHANNELS (0), all channels currently
+ * allocated to the given mode are affected.  Otherwise the caller's mask
+ * is intersected with the mode's channels (safety filter).
  */
 int io_timer_set_enable(bool state, io_timer_channel_mode_t mode,
 			io_timer_channel_allocation_t masks)
 {
+	if (masks == IO_TIMER_ALL_MODES_CHANNELS) {
+		/* Caller wants all channels in this mode */
+		masks = io_timer_get_mode_channels(mode);
+
+	} else {
+		/* Only affect channels that are actually in the requested mode */
+		masks &= io_timer_get_mode_channels(mode);
+	}
+
 	for (unsigned ch = 0; ch < MAX_TIMER_IO_CHANNELS; ch++) {
-		if ((masks & (1 << ch)) && g_channel_modes[ch] == mode) {
+		if (masks & (1 << ch)) {
 			uint8_t timer_idx = timer_io_channels[ch].timer_index;
 			uint8_t pwm_ch = timer_io_channels[ch].timer_channel;
 			uint32_t base = get_pwm_base(timer_idx);
 
 			if (state) {
-				/* Enable channel */
 				pwm_putreg(base + PWM_ENA_OFFSET, (1 << pwm_ch));
 
 			} else {
-				/* Disable channel */
 				pwm_putreg(base + PWM_DIS_OFFSET, (1 << pwm_ch));
 			}
 		}
@@ -607,12 +735,51 @@ int io_timer_get_mode_channels(io_timer_channel_mode_t mode)
 }
 
 /**
- * Get GPIO configuration for PWM input (not used for PWMC output)
+ * Get GPIO input configuration for a channel pin.
+ *
+ * Returns gpio_in if the board explicitly configured an input alternate
+ * function (e.g., TC capture).  Otherwise derives a GPIO input config
+ * from the output pin's port/pin so that PX4_MAKE_GPIO_EXTI and
+ * px4_arch_gpiosetevent get a valid pin identifier.
  */
 uint32_t io_timer_channel_get_as_pwm_input(unsigned channel)
 {
-	(void)channel;
-	return 0;  /* PWM input not implemented for PWMC */
+	if (channel >= MAX_TIMER_IO_CHANNELS) {
+		return 0;
+	}
+
+	if (timer_io_channels[channel].gpio_in != 0) {
+		return timer_io_channels[channel].gpio_in;
+	}
+
+	/* Fallback: derive input config from output pin's port/pin */
+	uint32_t pin_id = timer_io_channels[channel].gpio_out
+			  & (GPIO_PORT_MASK | GPIO_PIN_MASK);
+
+	return GPIO_INPUT | GPIO_CFG_PULLUP | pin_id;
+}
+
+/**
+ * Allocate a channel for a specific mode.
+ * Returns 0 on success, -EBUSY if already allocated.
+ */
+int io_timer_allocate_channel(unsigned channel, io_timer_channel_mode_t mode)
+{
+	if (channel >= MAX_TIMER_IO_CHANNELS) {
+		return -EINVAL;
+	}
+
+	irqstate_t flags = enter_critical_section();
+
+	if (g_channel_modes[channel] != IOTimerChanMode_NotUsed) {
+		leave_critical_section(flags);
+		return -EBUSY;
+	}
+
+	g_channel_modes[channel] = mode;
+	leave_critical_section(flags);
+
+	return OK;
 }
 
 /**
@@ -621,6 +788,26 @@ uint32_t io_timer_channel_get_as_pwm_input(unsigned channel)
 int io_timer_unallocate_channel(unsigned channel)
 {
 	return io_timer_free_channel(channel);
+}
+
+/**
+ * Get GPIO output-low configuration for a channel pin.
+ *
+ * Extracts port/pin from the peripheral mux config and returns a
+ * plain GPIO_OUTPUT | GPIO_OUTPUT_CLEAR configuration.  This is used
+ * by board_on_reset(), camera_trigger, and DShot idle-state paths
+ * that need to drive the pin as a generic digital output (low).
+ */
+uint32_t io_timer_channel_get_gpio_output(unsigned channel)
+{
+	if (channel >= MAX_TIMER_IO_CHANNELS) {
+		return 0;
+	}
+
+	uint32_t pin_id = timer_io_channels[channel].gpio_out
+			  & (GPIO_PORT_MASK | GPIO_PIN_MASK);
+
+	return GPIO_OUTPUT | GPIO_CFG_DEFAULT | GPIO_OUTPUT_CLEAR | pin_id;
 }
 
 /**
@@ -642,4 +829,25 @@ void io_timer_trigger(unsigned channels_mask)
 	 * boundary. No explicit trigger needed unlike some STM32 implementations.
 	 */
 	(void)channels_mask;
+}
+
+/**
+ * Enable/disable DMA request for DShot XDMAC transfer.
+ * Stub for Phase 2 (DShot output).
+ */
+void io_timer_update_dma_req(uint8_t timer, bool enable)
+{
+	UNUSED(timer);
+	UNUSED(enable);
+}
+
+/**
+ * Configure PWMC for DShot bit timing (CPRE, CPRD per protocol speed).
+ * Stub for Phase 2 (DShot output).
+ */
+int io_timer_set_dshot_mode(uint8_t timer, unsigned dshot_pwm_freq)
+{
+	UNUSED(timer);
+	UNUSED(dshot_pwm_freq);
+	return -ENOSYS;
 }

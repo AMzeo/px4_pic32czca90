@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- *   Copyright (c) 2024 PX4 Development Team. All rights reserved.
+ *   Copyright (c) 2024-2025 PX4 Development Team. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -36,58 +36,66 @@
 /**
  * @file io_timer_hw_description.h
  *
- * SAMV7 Timer/Counter hardware description for PWM output
+ * SAMV7 Timer/Counter and PWMC hardware description for PWM output.
+ * Provides constexpr helpers for timer_config.cpp board configuration.
  */
 
 #include <px4_arch/io_timer.h>
 #include <px4_arch/hw_description.h>
 #include <px4_platform_common/constexpr_util.h>
 
+/* NuttX hardware headers for PMC register addresses */
+#include "hardware/sam_pmc.h"
+
 #define initIOTimerChannelCapture initIOTimerChannel  /* alias for param metadata generation */
 
+/* PWMC channel register layout constants (from DS60001527J Section 38.7) */
+#define PWMC_CDTY_CH_OFFSET    0x04    /* CDTY offset from channel register group base */
+
+/*******************************************************************************
+ * TC (Timer/Counter) Helper Functions -- DEPRECATED
+ *
+ * TC-based PWM replaced by PWMC (io_timer_pwmc.c).
+ * Retained for reference and potential TC capture use (Phase 3).
+ ******************************************************************************/
+
 /**
- * Initialize an IO timer block
+ * Initialize an IO timer block (TC-based) -- DEPRECATED
  */
 static inline constexpr io_timers_t initIOTimer(Timer::Timer timer)
 {
 	io_timers_t ret{};
 
-	/* Get TC block base address based on timer number */
 	switch (timer) {
 	case Timer::Timer1:
 	case Timer::Timer2:
-		ret.base = SAM_TC012_BASE;  /* TC block 0 */
+		ret.base = SAM_TC012_BASE;
 		break;
 
 	case Timer::Timer3:
 	case Timer::Timer4:
 	case Timer::Timer5:
-		ret.base = SAM_TC345_BASE;  /* TC block 1 */
+		ret.base = SAM_TC345_BASE;
 		break;
 	}
 
-	ret.clock_register = 0;  /* Handled by io_timer_tc.c */
+	ret.clock_register = 0;
 	ret.clock_bit = 0;
+	ret.clock_freq = 0;
 	ret.vectorno = 0;
+	ret.dshot = {};
 
 	return ret;
 }
 
 /**
- * Initialize a timer channel with GPIO pin mapping
+ * Initialize a timer channel with GPIO pin mapping (TC-based) -- DEPRECATED
  */
 static inline constexpr timer_io_channels_t initIOTimerChannel(const io_timers_t io_timers_conf[MAX_IO_TIMERS],
 		Timer::TimerChannel timer, GPIO::GPIOPin pin)
 {
 	timer_io_channels_t ret{};
 
-	/* Set GPIO configuration for TC output (Peripheral B for TC)
-	 * NuttX GPIO encoding for SAMV7:
-	 * - Bits 21-23: Mode (GPIO_PERIPHB = 4 << 21)
-	 * - Bits 16-20: Config (GPIO_CFG_DEFAULT = 0)
-	 * - Bits 5-7:   Port (PIOA=0, PIOB=1, PIOC=2, PIOD=3, PIOE=4)
-	 * - Bits 0-4:   Pin number (0-31)
-	 */
 	uint32_t gpio_mode = (4 << 21);  /* GPIO_PERIPHB */
 	uint32_t gpio_cfg = (0 << 16);   /* GPIO_CFG_DEFAULT */
 	uint32_t gpio_port = ((uint32_t)pin.port << 5);
@@ -96,65 +104,20 @@ static inline constexpr timer_io_channels_t initIOTimerChannel(const io_timers_t
 	ret.gpio_out = gpio_mode | gpio_cfg | gpio_port | gpio_pin;
 	ret.gpio_in = 0;
 
-	/* Find timer index and channel
-	 * timer_index must match position in io_timers[] array
-	 * timer_channel is the channel offset within the TC block for address calculation
-	 */
 	ret.timer_index = 0xff;
 
 	switch (timer.timer) {
-	case Timer::Timer1:
-		ret.timer_index = 0;    /* io_timers[0] */
-		ret.timer_channel = 1;  /* TC0 CH1 */
-		break;
-
-	case Timer::Timer2:
-		ret.timer_index = 1;    /* io_timers[1] */
-		ret.timer_channel = 2;  /* TC0 CH2 */
-		break;
-
-	case Timer::Timer3:
-		ret.timer_index = 2;    /* io_timers[2] */
-		ret.timer_channel = 0;  /* TC1 CH0 */
-		break;
-
-	case Timer::Timer4:
-		ret.timer_index = 3;    /* io_timers[3] */
-		ret.timer_channel = 1;  /* TC1 CH1 */
-		break;
-
-	case Timer::Timer5:
-		ret.timer_index = 4;    /* io_timers[4] if used */
-		ret.timer_channel = 2;  /* TC1 CH2 */
-		break;
+	case Timer::Timer1: ret.timer_index = 0; ret.timer_channel = 1; break;
+	case Timer::Timer2: ret.timer_index = 1; ret.timer_channel = 2; break;
+	case Timer::Timer3: ret.timer_index = 2; ret.timer_channel = 0; break;
+	case Timer::Timer4: ret.timer_index = 3; ret.timer_channel = 1; break;
+	case Timer::Timer5: ret.timer_index = 4; ret.timer_channel = 2; break;
 	}
+
+	ret.masks = 0;
+	ret.ccr_offset = 0;
 
 	constexpr_assert(ret.timer_index != 0xff, "Timer not found");
-
-	return ret;
-}
-
-/**
- * Timer channel mapping initialization
- */
-struct io_timers_channel_mapping_t {
-	uint32_t element[MAX_IO_TIMERS];
-};
-
-static inline constexpr io_timers_channel_mapping_t initIOTimerChannelMapping(const io_timers_t io_timers_conf[MAX_IO_TIMERS],
-		const timer_io_channels_t timer_io_channels_conf[MAX_TIMER_IO_CHANNELS])
-{
-	io_timers_channel_mapping_t ret{};
-
-	for (int i = 0; i < MAX_IO_TIMERS; ++i) {
-		ret.element[i] = 0;
-	}
-
-	for (int i = 0; i < MAX_TIMER_IO_CHANNELS; ++i) {
-		if (timer_io_channels_conf[i].timer_index < MAX_IO_TIMERS) {
-			ret.element[timer_io_channels_conf[i].timer_index] |= (1 << i);
-		}
-	}
 
 	return ret;
 }
@@ -163,8 +126,8 @@ static inline constexpr io_timers_channel_mapping_t initIOTimerChannelMapping(co
  * PWMC (PWM Controller) Helper Functions
  *
  * SAMV7 PWMC provides hardware PWM with 4 channels per module.
- * - PWM0: PID 31, base 0x40020000
- * - PWM1: PID 60, base 0x4005C000
+ * - PWM0: PID 31, base 0x40020000, XDMAC TX ch 13
+ * - PWM1: PID 60, base 0x4005C000, XDMAC TX ch 39
  ******************************************************************************/
 
 /**
@@ -174,10 +137,27 @@ static inline constexpr io_timers_channel_mapping_t initIOTimerChannelMapping(co
 static inline constexpr io_timers_t initIOPWMTimer(PWM::PWMModule module)
 {
 	io_timers_t ret{};
+
 	ret.base = pwmBaseRegister(module);
-	ret.clock_register = 0;  /* Clock enable handled by io_timer_pwmc.c */
-	ret.clock_bit = 0;
-	ret.vectorno = 0;
+	ret.clock_freq = 150000000UL;  /* MCK = 150MHz */
+	ret.dshot = {};
+
+	switch (module) {
+	case PWM::PWM0:
+		ret.clock_register = SAM_PMC_PCER0;
+		ret.clock_bit = (1u << SAM_PID_PWM0);         /* PID 31 in PCER0 */
+		ret.vectorno = SAM_IRQ_PWM0;
+		ret.dshot.xdmac_ch_tx = 13;                   /* XDMAC HW request ID for PWM0 TX */
+		break;
+
+	case PWM::PWM1:
+		ret.clock_register = SAM_PMC_PCER1;
+		ret.clock_bit = (1u << (SAM_PID_PWM1 - 32));  /* PID 60 in PCER1 (bit 28) */
+		ret.vectorno = SAM_IRQ_PWM1;
+		ret.dshot.xdmac_ch_tx = 39;                   /* XDMAC HW request ID for PWM1 TX */
+		break;
+	}
+
 	return ret;
 }
 
@@ -208,14 +188,20 @@ static inline constexpr timer_io_channels_t initIOPWMChannel(const io_timers_t i
 	ret.gpio_out = gpio_mode | gpio_cfg | gpio_port | gpio_pin;
 	ret.gpio_in = 0;
 
-	/* Derive timer_index from PWM module
-	 * This maps to position in io_timers[] array:
-	 * PWM0 = index 0, PWM1 = index 1
-	 */
+	/* Derive timer_index from PWM module: PWM0 = index 0, PWM1 = index 1 */
 	ret.timer_index = (uint8_t)pwm_channel.module;
 
 	/* Channel within PWMC (0-3) for register offset calculation */
 	ret.timer_channel = (uint8_t)pwm_channel.channel;
 
+	/* Channel bit in PWMC SR/ISR registers */
+	ret.masks = (uint16_t)(1u << (uint8_t)pwm_channel.channel);
+
+	/* CDTY offset from channel register group base */
+	ret.ccr_offset = PWMC_CDTY_CH_OFFSET;
+
 	return ret;
 }
+
+/* Use common initIOTimerChannelMapping from px4_platform */
+#include <px4_platform/io_timer_init.h>
