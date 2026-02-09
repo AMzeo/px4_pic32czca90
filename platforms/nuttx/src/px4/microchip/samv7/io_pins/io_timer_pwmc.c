@@ -259,15 +259,9 @@ int io_timer_init_timer(unsigned timer)
 	/* Set default period for 400Hz PWM */
 	g_timer_period[timer] = g_timer_clock[timer] / PWM_DEFAULT_RATE;
 
-	PX4_INFO("PWMC Timer %u init: base=0x%08lx rate=%uHz cpre=%u clk=%luHz period=%lu",
-		 timer, (unsigned long)io_timers[timer].base, PWM_DEFAULT_RATE, g_timer_cpre[timer],
-		 (unsigned long)g_timer_clock[timer], (unsigned long)g_timer_period[timer]);
-
-	/* Direct read of PWM0 CMR1 (PA2 channel) at absolute address to verify */
-	uint32_t direct_cmr1 = getreg32(0x40020220);  /* PWM0_CMR1 absolute address */
-	uint32_t direct_cprd1 = getreg32(0x4002022C); /* PWM0_CPRD1 absolute address */
-	PX4_INFO("PWMC Direct read PWM0_CH1: CMR1@0x40020220=0x%08lx CPRD1@0x4002022C=%lu",
-		 (unsigned long)direct_cmr1, (unsigned long)direct_cprd1);
+	PX4_DEBUG("PWMC Timer %u init: base=0x%08lx rate=%uHz cpre=%u clk=%luHz period=%lu",
+		  timer, (unsigned long)io_timers[timer].base, PWM_DEFAULT_RATE, g_timer_cpre[timer],
+		  (unsigned long)g_timer_clock[timer], (unsigned long)g_timer_period[timer]);
 
 	g_timers_initialized[timer] = true;
 
@@ -280,8 +274,9 @@ int io_timer_init_timer(unsigned timer)
 int io_timer_channel_init(unsigned channel, io_timer_channel_mode_t mode,
 			  channel_handler_t channel_handler, void *context)
 {
-	(void)channel_handler;
-	(void)context;
+	/* channel_handler and context unused until Phase 1C allocation API */
+	UNUSED(channel_handler);
+	UNUSED(context);
 
 	if (channel >= MAX_TIMER_IO_CHANNELS) {
 		return -EINVAL;
@@ -312,17 +307,7 @@ int io_timer_channel_init(unsigned channel, io_timer_channel_mode_t mode,
 		uint32_t gpio = timer_io_channels[channel].gpio_out;
 
 		/* Configure GPIO for PWMC output (peripheral A or B) */
-		PX4_INFO("PWMC Ch %u: configuring GPIO 0x%08lx", channel, (unsigned long)gpio);
 		sam_configgpio(gpio);
-
-		/* Debug: Read back PIO registers to verify peripheral mux */
-		uint32_t pio_base = 0x400E0E00;  /* PIOA base */
-		uint32_t pin_mask = (1 << 2);     /* PA2 */
-		uint32_t psr = getreg32(pio_base + 0x08);   /* PIO_PSR - PIO Status (1=PIO, 0=peripheral) */
-		uint32_t abcdsr1 = getreg32(pio_base + 0x70);  /* PIO_ABCDSR1 */
-		uint32_t abcdsr2 = getreg32(pio_base + 0x74);  /* PIO_ABCDSR2 */
-		PX4_INFO("PIOA: PSR=0x%08lx ABCDSR1=0x%08lx ABCDSR2=0x%08lx (PA2 mask=0x%08lx)",
-			 (unsigned long)psr, (unsigned long)abcdsr1, (unsigned long)abcdsr2, (unsigned long)pin_mask);
 
 		/* Disable channel first (write to DIS register) */
 		pwm_putreg(base + PWM_DIS_OFFSET, (1 << pwm_ch));
@@ -343,18 +328,6 @@ int io_timer_channel_init(unsigned channel, io_timer_channel_mode_t mode,
 		 * For motor safety, we want 0 duty initially
 		 */
 		pwm_ch_putreg(ch_base, PWM_CDTY_OFFSET, 0);
-
-		/* Debug: verify registers and addresses */
-		uint32_t cmr_addr = ch_base;
-		uint32_t cprd_addr = ch_base + (PWM_CPRD_OFFSET - PWM_CMR_OFFSET);
-		uint32_t cmr_read = pwm_ch_getreg(ch_base, PWM_CMR_OFFSET);
-		uint32_t cprd_read = pwm_ch_getreg(ch_base, PWM_CPRD_OFFSET);
-		uint32_t sr = pwm_getreg(base + PWM_SR_OFFSET);
-		PX4_INFO("PWMC Ch %u init (pwm_ch=%u): CMR@0x%08lx=0x%08lx CPRD@0x%08lx=%lu SR=0x%08lx",
-			 channel, pwm_ch,
-			 (unsigned long)cmr_addr, (unsigned long)cmr_read,
-			 (unsigned long)cprd_addr, (unsigned long)cprd_read,
-			 (unsigned long)sr);
 
 		/* Enable channel (write to ENA register) */
 		pwm_putreg(base + PWM_ENA_OFFSET, (1 << pwm_ch));
@@ -403,9 +376,9 @@ int io_timer_set_rate(unsigned timer, unsigned rate)
 	g_timer_cpre[timer] = new_cpre;
 	g_timer_period[timer] = period;
 
-	PX4_INFO("PWMC Timer %u: rate=%uHz cpre=%u clk=%luHz period=%lu%s",
-		 timer, rate, new_cpre, (unsigned long)new_clock, (unsigned long)period,
-		 prescaler_changed ? " (prescaler changed)" : "");
+	PX4_DEBUG("PWMC Timer %u: rate=%uHz cpre=%u clk=%luHz period=%lu%s",
+		  timer, rate, new_cpre, (unsigned long)new_clock, (unsigned long)period,
+		  prescaler_changed ? " (prescaler changed)" : "");
 
 	uint32_t base = get_pwm_base(timer);
 
@@ -438,8 +411,6 @@ int io_timer_set_rate(unsigned timer, unsigned rate)
 				if (timeout_ms == 0) {
 					PX4_ERR("PWMC Ch %u: timeout waiting for disable (SR=0x%08lx)",
 						ch, (unsigned long)sr);
-				} else {
-					PX4_INFO("PWMC Ch %u: disabled after %dms", ch, 50 - timeout_ms);
 				}
 
 				/* Update CMR with new prescaler */
@@ -448,13 +419,6 @@ int io_timer_set_rate(unsigned timer, unsigned rate)
 
 				/* Write CPRD directly (channel is disabled) */
 				pwm_ch_putreg(ch_base, PWM_CPRD_OFFSET, period);
-
-				/* Verify writes by reading back */
-				uint32_t cmr_read = pwm_ch_getreg(ch_base, PWM_CMR_OFFSET);
-				uint32_t cprd_read = pwm_ch_getreg(ch_base, PWM_CPRD_OFFSET);
-				PX4_INFO("PWMC Ch %u (pwm_ch=%u): CMR=0x%08lx (wrote 0x%08lx) CPRD=%lu (wrote %lu)",
-					 ch, pwm_ch, (unsigned long)cmr_read, (unsigned long)cmr,
-					 (unsigned long)cprd_read, (unsigned long)period);
 
 				/* Re-enable channel */
 				pwm_putreg(base + PWM_ENA_OFFSET, (1 << pwm_ch));
@@ -498,9 +462,6 @@ int io_timer_set_enable(bool state, io_timer_channel_mode_t mode,
 /**
  * Set PWM duty cycle (CCR = Compare Capture Register, here CDTY)
  * Value is in microseconds (1000-2000 typical for servos/ESCs)
- *
- * DIAGNOSTIC VERSION: Uses CDTYUPD with extensive diagnostics including
- * counter verification to determine why physical output doesn't change.
  */
 int io_timer_set_ccr(unsigned channel, uint16_t value)
 {
@@ -514,8 +475,6 @@ int io_timer_set_ccr(unsigned channel, uint16_t value)
 
 	uint32_t ch_base = get_channel_reg_base(channel);
 	uint8_t timer_idx = timer_io_channels[channel].timer_index;
-	uint8_t pwm_ch = timer_io_channels[channel].timer_channel;
-	uint32_t base = get_pwm_base(timer_idx);
 
 	/* Convert microseconds to timer ticks using current clock frequency
 	 * Use uint64_t to prevent overflow: 2000 * 2343750 > uint32_t max!
@@ -527,76 +486,10 @@ int io_timer_set_ccr(unsigned channel, uint16_t value)
 		ticks = g_timer_period[timer_idx];
 	}
 
-	/* Try BOTH: write to CDTYUPD and also directly to CDTY
-	 * CDTYUPD should apply at next period boundary
-	 * CDTY direct write while channel is momentarily disabled forces immediate update
+	/* Use CDTYUPD for glitch-free duty cycle update.
+	 * Update applies at end of current period (DS60001527J).
 	 */
-
-	/* First, write to CDTYUPD for buffered update */
 	pwm_ch_putreg(ch_base, PWM_CDTYUPD_OFFSET, ticks);
-
-	/* Also try direct CDTY write with brief disable/enable */
-	pwm_putreg(base + PWM_DIS_OFFSET, (1 << pwm_ch));
-	up_udelay(5);
-	pwm_ch_putreg(ch_base, PWM_CDTY_OFFSET, ticks);
-	pwm_putreg(base + PWM_ENA_OFFSET, (1 << pwm_ch));
-
-	/* Debug: diagnose the duty cycle update */
-	static uint32_t last_ticks[MAX_TIMER_IO_CHANNELS] = {0};
-
-	if (ticks != last_ticks[channel]) {
-		uint32_t sr = pwm_getreg(base + PWM_SR_OFFSET);           /* Channel enabled? */
-		uint32_t scm = pwm_getreg(base + 0x020);                  /* PWM_SCM: Sync mode */
-		uint32_t cdty = pwm_ch_getreg(ch_base, PWM_CDTY_OFFSET);  /* Current duty */
-		uint32_t cprd = pwm_ch_getreg(ch_base, PWM_CPRD_OFFSET);  /* Period */
-		uint32_t cmr = pwm_ch_getreg(ch_base, PWM_CMR_OFFSET);    /* Channel mode */
-
-		/* Read CCNT (Channel Counter) to verify counter is running */
-		uint32_t ccnt1 = pwm_ch_getreg(ch_base, PWM_CCNT_OFFSET);
-		up_udelay(100);  /* 100us delay */
-		uint32_t ccnt2 = pwm_ch_getreg(ch_base, PWM_CCNT_OFFSET);
-		up_udelay(100);
-		uint32_t ccnt3 = pwm_ch_getreg(ch_base, PWM_CCNT_OFFSET);
-
-		/* Check dead-time register - DTH/DTL could affect output */
-		uint32_t dt = pwm_ch_getreg(ch_base, PWM_CMR_OFFSET + 0x18);  /* PWM_DT offset from CMR */
-
-		/* Also check output override/fault registers */
-		uint32_t os = pwm_getreg(base + 0x048);    /* PWM_OS: Output Selection */
-		uint32_t oov = pwm_getreg(base + 0x044);   /* PWM_OOV: Output Override Value */
-		uint32_t fpe = pwm_getreg(base + 0x06C);   /* PWM_FPE: Fault Protection Enable */
-		uint32_t fsr = pwm_getreg(base + 0x060);   /* PWM_FSR: Fault Status */
-
-		PX4_INFO("PWMC Ch %u (pwm_ch=%u): set_ccr %uus -> %lu ticks",
-			 channel, pwm_ch, value, (unsigned long)ticks);
-		PX4_INFO("  CDTY=%lu CPRD=%lu CMR=0x%08lx",
-			 (unsigned long)cdty, (unsigned long)cprd, (unsigned long)cmr);
-		PX4_INFO("  CMR decode: cpre=%lu calg=%d cpol=%d upds=%d dte=%d",
-			 (unsigned long)(cmr & 0xF),
-			 (cmr & (1 << 8)) ? 1 : 0,   /* CALG: alignment */
-			 (cmr & (1 << 9)) ? 1 : 0,   /* CPOL: polarity */
-			 (cmr & (1 << 11)) ? 1 : 0,  /* UPDS: update selection */
-			 (cmr & (1 << 16)) ? 1 : 0); /* DTE: dead-time enable */
-		PX4_INFO("  CCNT: %lu -> %lu -> %lu (counter %s)",
-			 (unsigned long)ccnt1, (unsigned long)ccnt2, (unsigned long)ccnt3,
-			 (ccnt1 != ccnt2 || ccnt2 != ccnt3) ? "RUNNING" : "STUCK!");
-		PX4_INFO("  SR=0x%08lx (ch%u ena=%d) SCM=0x%08lx DT=0x%08lx",
-			 (unsigned long)sr, pwm_ch, (sr & (1 << pwm_ch)) ? 1 : 0,
-			 (unsigned long)scm, (unsigned long)dt);
-		PX4_INFO("  OS=0x%08lx OOV=0x%08lx FPE=0x%08lx FSR=0x%08lx",
-			 (unsigned long)os, (unsigned long)oov, (unsigned long)fpe,
-			 (unsigned long)fsr);
-
-		/* Calculate expected duty percentage for verification */
-		if (cprd > 0) {
-			uint32_t duty_pct = (cdty * 100) / cprd;
-			uint32_t pulse_us = (uint64_t)cdty * 1000000ULL / g_timer_clock[timer_idx];
-			PX4_INFO("  Expected: %lu%% duty, %luus pulse width",
-				 (unsigned long)duty_pct, (unsigned long)pulse_us);
-		}
-
-		last_ticks[channel] = ticks;
-	}
 
 	return OK;
 }

@@ -33,6 +33,9 @@
 /**
  * @file io_timer_tc.c
  *
+ * DEPRECATED: TC-based PWM replaced by PWMC (io_timer_pwmc.c).
+ * Retained for reference only. Do not add to CMakeLists.
+ *
  * SAMV7 IO Timer implementation using TC (Timer/Counter) in waveform mode.
  *
  * PWM generation using TC waveform mode:

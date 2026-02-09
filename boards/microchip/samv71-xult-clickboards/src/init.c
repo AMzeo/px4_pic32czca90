@@ -188,8 +188,32 @@ __EXPORT void board_peripheral_reset(int ms)
  ************************************************************************************/
 __EXPORT void board_on_reset(int status)
 {
-	/* No PWM channels configured yet for SAMV71 - TODO */
-	(void)status;  /* Unused */
+	/*
+	 * Safety: disable all PWMC outputs and drive motor pins low.
+	 * Uses self-contained register constants so this works even if
+	 * the PWMC driver has not been initialized.
+	 */
+
+#define SAMV7_PWM0_BASE     0x40020000
+#define SAMV7_PWM_DIS       0x008       /* PWM Disable Register offset */
+#define SAMV7_PWM_DIS_ALL   0x0F        /* Channels 0-3 disable mask */
+
+	/* 1. Disable all PWM0 channels via hardware register */
+	putreg32(SAMV7_PWM_DIS_ALL, SAMV7_PWM0_BASE + SAMV7_PWM_DIS);
+
+	/* 2. Reconfigure each motor GPIO from peripheral-mux to output-low.
+	 *    Preserve port+pin bits, replace mode with GPIO_OUTPUT.
+	 */
+	for (int i = 0; i < DIRECT_PWM_OUTPUT_CHANNELS; i++) {
+		uint32_t pin_id = timer_io_channels[i].gpio_out & (GPIO_PORT_MASK | GPIO_PIN_MASK);
+		sam_configgpio(GPIO_OUTPUT | GPIO_CFG_DEFAULT | GPIO_OUTPUT_CLEAR | pin_id);
+	}
+
+#undef SAMV7_PWM0_BASE
+#undef SAMV7_PWM_DIS
+#undef SAMV7_PWM_DIS_ALL
+
+	UNUSED(status);
 }
 
 /************************************************************************************

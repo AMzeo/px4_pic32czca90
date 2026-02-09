@@ -33,10 +33,8 @@
 /**
  * @file io_timer_stub.c
  *
- * SAMV7 IO Timer stub implementation for arch_io_pins library
- *
- * This provides minimal stub implementations for PWM/Timer functionality.
- * Full implementation using SAMV7 TC (Timer/Counter) peripherals is TODO.
+ * DEPRECATED: Stub replaced by full PWMC implementation (io_timer_pwmc.c).
+ * Retained for reference only. Do not add to CMakeLists.
  */
 
 #include <px4_platform_common/px4_config.h>
