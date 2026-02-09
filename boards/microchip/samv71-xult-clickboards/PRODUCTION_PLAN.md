@@ -39,22 +39,48 @@ This phase closes an existing safety hole and removes debug instrumentation that
 `board_on_reset()` at line 189 is already wired and called at boot (line 251) but does nothing.
 This means on any reset, PWM outputs remain in their last state — **motors can run uncontrolled**.
 
-Implement immediately (no dependency on Phase 1 allocation API — use direct register writes):
+Implement immediately (no dependency on Phase 1 allocation API — use direct register writes with
+local constants defined in init.c). `PWM_DIS_OFFSET` is not in any shared header — it is defined
+locally in `io_timer_pwmc.c`. For safety-critical reset code, define concrete constants in init.c
+rather than depending on driver internals.
+
+**Required includes** (already present in init.c): `board_config.h` → `sam_gpio.h` (provides
+`sam_configgpio()`, `GPIO_OUTPUT`, `GPIO_OUTPUT_CLEAR`, `GPIO_PORT_PIOx`, `GPIO_PIN*`);
+`px4_arch/io_timer.h` (provides `timer_io_channels[]`).
+
 ```c
+/*
+ * Local PWMC register constants for reset safety.
+ * Defined here (not imported from driver) so reset works even if
+ * the driver has not been linked or initialized.
+ */
+#define SAMV7_PWM0_BASE     0x40020000
+#define SAMV7_PWM_DIS       0x008       /* PWM Disable Register offset */
+#define SAMV7_PWM_DIS_ALL   0x0F        /* Channels 0-3 disable mask */
+
 __EXPORT void board_on_reset(int status)
 {
-    /* Disable all PWM0 channels immediately */
-    putreg32(0xF, SAM_PWM0_BASE + PWM_DIS_OFFSET);
+    /* 1. Disable all PWM0 channels via hardware register */
+    putreg32(SAMV7_PWM_DIS_ALL, SAMV7_PWM0_BASE + SAMV7_PWM_DIS);
 
-    /* Reconfigure motor GPIOs as output-low */
+    /* 2. Reconfigure each motor GPIO from peripheral-mux to output-low.
+     *    GPIO encoding (sam_gpio.h):
+     *      bits 21-23 = mode (GPIO_OUTPUT = 2 << 21)
+     *      bits 16-20 = config (GPIO_CFG_DEFAULT = 0)
+     *      bit  12    = initial value (GPIO_OUTPUT_CLEAR = 0 → low)
+     *      bits 5-7   = port, bits 0-4 = pin
+     *    We preserve port+pin from the channel's gpio_out and replace mode.
+     */
     for (int i = 0; i < DIRECT_PWM_OUTPUT_CHANNELS; i++) {
-        /* Convert peripheral GPIO to output-low GPIO */
-        uint32_t gpio = timer_io_channels[i].gpio_out;
-        uint32_t gpio_output_low = (gpio & 0xFF) | GPIO_OUTPUT | GPIO_OUTPUT_CLEAR;
-        sam_configgpio(gpio_output_low);
+        uint32_t pin_id = timer_io_channels[i].gpio_out & (GPIO_PORT_MASK | GPIO_PIN_MASK);
+        sam_configgpio(GPIO_OUTPUT | GPIO_CFG_DEFAULT | GPIO_OUTPUT_CLEAR | pin_id);
     }
 }
 ```
+
+**After Phase 1 lands:** Replace the loop body with `io_timer_channel_get_gpio_output()` for
+consistency with other PX4 boards. The direct-register approach above is intentionally self-contained
+so it works even before Phase 1 allocation API exists.
 
 ### 0B: Remove Debug Instrumentation (Production Blocker)
 
@@ -356,16 +382,22 @@ Input capture uses TC (Timer/Counter), not PWMC. TC5 on PC29/TIOA5 is already re
 
 ### Integration with Current RC Strategy
 
-**Current state:** Board defaults use serial RC on UART4/ttyS3 (`rc.board_defaults` line 43: `RC_PORT_CONFIG 300`).
-**Pin conflict:** PD18 is used by both UART4 RX (serial RC) and TC5 (capture RC). Only one can be active.
+**Current state:** Board defaults use serial RC on UART4/ttyS3/PD18 (`rc.board_defaults` line 43: `RC_PORT_CONFIG 300`).
+**Pin situation:** Serial RC (UART4/PD18) and PPM capture (TC5/PC29) are on **different pins** — no
+hardware conflict. Both could be configured simultaneously, but PX4 typically uses only one RC input
+method at a time.
+
+**Note:** PD18 does have a separate conflict (SD Card Detect vs UART4 RX), documented in the Known
+Pin Conflicts section of `MEMORY.md`. That conflict is unrelated to TC5 capture.
 
 **Coexistence plan:**
-- Serial RC (SBUS/CRSF) and PPM capture are mutually exclusive on this board
-- Add `RC_INPUT_TYPE` param or use existing `RC_PORT_CONFIG` to select:
+- Serial RC (SBUS/CRSF on UART4/PD18) is the default and most common for modern receivers
+- PPM capture (TC5/PC29) is an alternative for legacy PPM receivers
+- Use existing `RC_PORT_CONFIG` param to select:
   - `RC_PORT_CONFIG = 300` → UART4 serial RC (current default, SBUS/CRSF)
-  - `RC_PORT_CONFIG = 0` + PPM enabled → TC5 capture mode (PPM RC)
-- `rc.board_defaults` keeps serial RC as default (most common for modern receivers)
-- Startup script (`rc.board_sensors` or equivalent) must check param and configure pin accordingly
+  - `RC_PORT_CONFIG = 0` + PPM module started → TC5 capture mode (PPM RC)
+- `rc.board_defaults` keeps serial RC as default
+- Startup script (`rc.board_sensors` or equivalent) must check param and conditionally start PPM capture module
 
 ### New File
 - `platforms/nuttx/src/px4/microchip/samv7/io_pins/input_capture.c`
