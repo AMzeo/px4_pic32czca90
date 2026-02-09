@@ -7,7 +7,7 @@
 | Feature | Status | Notes |
 |---------|--------|-------|
 | **Core Flight Stack** | ✅ | Commander, EKF2, Navigator, MC control |
-| **PWM Output (4 channels)** | ✅ | PWMC-based, 286-400 Hz |
+| **PWM Output (4 channels)** | ✅ | PWMC-based, 50-400 Hz (dynamic prescaler) |
 | **IMU (ICM20689)** | ✅ | SPI on EXT1 header |
 | **Barometer (BMP388)** | ✅ | SPI on EXT2 header |
 | **Magnetometer (AK09915)** | ✅ | I2C on mikroBUS |
@@ -33,7 +33,7 @@
 | Feature | Priority | Hours | Blocker? |
 |---------|----------|-------|----------|
 | **DShot Output** | Must-Have | 60-80 | Yes |
-| **PWM 50 Hz (Servos)** | Must-Have | 8-12 | Yes |
+| **PWM 50 Hz (Servos)** | ✅ Done | 0 | No |
 | **PWM Capture (RC PPM)** | Must-Have | 16-24 | Yes |
 | **IO Timer Allocation API** | Must-Have | 20-30 | Yes |
 | **OneShot125/42** | Must-Have | Incl. in DShot | Yes |
@@ -186,8 +186,8 @@ This document provides a comprehensive comparison between the SAMV71-XULT-Clickb
 
 | Feature | FMUv6X | SAMV71-XULT | Impact |
 |---------|--------|-------------|--------|
-| Timer prescaler | Dynamic (any freq) | Fixed MCK/8 | Min ~286 Hz |
-| 50 Hz servo PWM | Yes | No (needs rework) | Servo incompatible |
+| Timer prescaler | Dynamic (any freq) | Dynamic MCK/8 or MCK/64 | ✅ Full range |
+| 50 Hz servo PWM | Yes | ✅ Yes (dynamic prescaler) | Compatible |
 | PWM capture | Yes (TIM1_CH2) | Reserved only | No input capture |
 | OneShot modes | Yes | No | Racing quad incompatible |
 | DShot DMA burst | Yes | No | No DShot support |
@@ -417,7 +417,7 @@ This document provides a comprehensive comparison between the SAMV71-XULT-Clickb
 |------|-------|
 | 1. DShot output (DMA burst) | 60-80 |
 | 2. IO timer allocation + capture | 20-30 |
-| 3. PWM rate flexibility (50 Hz) | 8-12 |
+| 3. PWM rate flexibility (50 Hz) | ✅ Done |
 | 4. RC input path | 16-24 |
 | 5. SD card detect policy | 4-8 |
 | 6. PA7/XIN32 resolution | ✅ Done |

@@ -177,6 +177,21 @@ The higher prescaler (MCK/8) provides better duty cycle resolution for high-freq
 - [x] Rate change from 50Hz to 400Hz (prescaler change back)
 - [x] Duty cycle accuracy at both rates
 - [x] ESC arming with 50Hz PWM
+- [x] Motor spin control with actuator_test
+
+## Debugging Notes
+
+### CDTYUPD vs Direct CDTY Write
+
+During debugging, it appeared that duty cycle wasn't changing on the oscilloscope despite
+correct register values. Investigation showed:
+
+1. CDTYUPD (buffered update register) works correctly for async channels
+2. Updates apply at the end of each PWM period (20ms at 50Hz)
+3. The apparent issue was actually a **scope probe connection problem**
+
+**Conclusion:** Use CDTYUPD for glitch-free duty updates. Direct CDTY writes with
+disable/enable cycles are NOT needed and would cause output glitches.
 
 ## References
 

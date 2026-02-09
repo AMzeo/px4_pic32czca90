@@ -1,3 +1,5 @@
+> **SUPERSEDED** by [PRODUCTION_PLAN.md](PRODUCTION_PLAN.md) as of 2026-02-08. This document contains stale information (e.g., incorrectly states ADC is missing, references 3 TC-based PWM channels). Refer to the production plan for current status.
+
 # SAMV7 PX4 Production Readiness Assessment
 
 **Date:** 2025-12-06
