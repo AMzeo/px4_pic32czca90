@@ -442,15 +442,90 @@ int up_input_capture_set_trigger(unsigned channel, input_capture_edge edge);
 - HRT callback checks timestamp per channel
 - If `io_timer_set_ccr()` not called within timeout → force duty to zero
 
-### 4C: FRAM Parameter Storage Prep
-**File:** `board_config.h`
-- Define `FLASH_BASED_PARAMS` conditionally (when FRAM Click board is populated)
-- Stub MTD integration for future EEPROM/FRAM
-
 ### Verify
 - PWMC outputs go low on fault trigger
 - Motors stop if update loop stalls (watchdog test)
-- Parameter save/load cycle on SD card unaffected
+
+---
+
+## Phase 4C: QSPI Flash Parameter Storage
+**Complexity: M | Dependency: None (independent of io_timer) | Dev Board**
+
+The SAMV71-XULT has an onboard **SST26VF064B 8MB QSPI flash** that should be used for parameter,
+calibration, mission, and dataman storage. Currently all parameters are on SD card only, and
+dataman/caldata MTD paths fail at boot (`ERROR [dataman] open '/fs/mtd_caldata' failed`).
+
+This phase has **no dependency** on Phases 1-4 and can run in parallel.
+
+See [QSPI_FLASH_IMPLEMENTATION_PLAN.md](QSPI_FLASH_IMPLEMENTATION_PLAN.md) for full implementation
+details, code sketches, and troubleshooting guide.
+
+### Hardware
+
+| Parameter | Value |
+|-----------|-------|
+| Part | SST26VF064B |
+| Capacity | 8 MB (64 Mbit) |
+| Interface | QSPI (Quad SPI) |
+| Max Clock | 104 MHz |
+| Erase Cycles | 100,000 per sector |
+| Sector Size | 4 KB |
+
+**QSPI pins (fixed on SAMV71-XULT, all Peripheral A):**
+PA11 (CS), PA13 (IO0), PA12 (IO1), PA17 (IO2), PD31 (IO3), PA14 (SCK)
+
+**Pin conflict with Phase 5 (8-ch PWM):** PA12 and PA14 are used by QSPI on the dev board. On the
+custom PCB, PWM1_H0 and PWM1_H1 must use the alternate pin options (PA30/PA31 Periph A) instead of
+PA12/PA14 Periph C to avoid conflict with QSPI. This is a custom PCB routing constraint, not a dev
+board issue.
+
+### MTD Partition Layout
+
+```
+/dev/qspiflash0 (8MB)
++-- Partition 0: /fs/mtd_params     (128 KB, 32 blocks)  - System parameters
++-- Partition 1: /fs/mtd_caldata    ( 64 KB, 16 blocks)  - Factory calibration
++-- Partition 2: /fs/mtd_waypoints  (  2 MB, 512 blocks) - Mission/geofence/rally
++-- Partition 3: /fs/mtd_dataman    (  4 MB, 1024 blocks) - Dataman general storage
++-- Reserved                        (~1.8 MB)             - Future use
+```
+
+Flight logs stay on SD card (continuous high-throughput writes, GB capacity needed).
+
+### Implementation Steps
+
+**4C-1: Enable QSPI in NuttX defconfig**
+- `CONFIG_SAMV7_QSPI=y`, `CONFIG_SAMV7_QSPI_DMA=y`
+- `CONFIG_MTD_SST26=y`, `CONFIG_SST26_SPIFREQUENCY=50000000`
+
+**4C-2: Add QSPI pin definitions**
+- File: `boards/microchip/samv71-xult-clickboards/nuttx-config/include/board.h`
+- Define `GPIO_QSPI0_CS`, `GPIO_QSPI0_IO0-3`, `GPIO_QSPI0_SCK`
+
+**4C-3: Create `qspi.c` — QSPI peripheral + SST26 flash init**
+- File: `boards/microchip/samv71-xult-clickboards/src/qspi.c` (new)
+- `samv71_qspi_initialize()`: init QSPI peripheral, probe SST26, register `/dev/mtdqspi`
+- Called from `board_app_initialize()` in init.c (non-fatal on failure — SD card fallback)
+
+**4C-4: Create `mtd.cpp` — MTD partition manifest**
+- File: `boards/microchip/samv71-xult-clickboards/src/mtd.cpp` (new)
+- Define `board_get_manifest()` with 4-partition layout
+- When `CONFIG_SAMV7_QSPI` is disabled, returns empty manifest (SD card fallback)
+
+**4C-5: Update board config**
+- File: `boards/microchip/samv71-xult-clickboards/src/board_config.h`
+- Add `FLASH_BASED_PARAMS`, `FLASH_BASED_DATAMAN`, storage path defines
+- File: `boards/microchip/samv71-xult-clickboards/src/CMakeLists.txt`
+- Add `qspi.c`, `mtd.cpp` to build
+
+### Verify
+- Boot log shows `SST26VF064B: 8192 KB (2048 sectors of 4096 bytes)`
+- `ls /dev/mtd*` shows all 4 partitions
+- `param set TEST_QSPI 12345 && param save && reboot` → parameter persists
+- `dataman status` — no more caldata/dataman errors
+- Mission upload via QGC survives reboot
+- SD card removal does not lose parameters
+- Rollback: set `CONFIG_SAMV7_QSPI` to `n`, rebuild → falls back to SD card
 
 ---
 
@@ -500,8 +575,8 @@ switch (periph) {
 - Enable `CONFIG_SAMV7_PWM1*` in defconfig
 
 PWM1 pin options (custom PCB selects):
-- PWM1_H0: PA12 (Periph C) or PA30 (Periph A)
-- PWM1_H1: PA14 (Periph C) or PA31 (Periph A)
+- PWM1_H0: ~~PA12 (Periph C)~~ **CONFLICT: QSPI IO1** → use PA30 (Periph A)
+- PWM1_H1: ~~PA14 (Periph C)~~ **CONFLICT: QSPI SCK** → use PA31 (Periph A)
 - PWM1_H2: PA1 (Periph A) or PD0 (Periph C)
 - PWM1_H3: PA8 (Periph A) or PD2 (Periph C)
 
@@ -551,17 +626,20 @@ Phase 0 (Safety + Cleanup)  ← PRODUCTION BLOCKER
     │
     v
 Phase 1 (API Convergence + Allocation)  ← FOUNDATION
-   ╱    │    ╲
-  v     v     v
-P2     P3    P4          (can run in parallel)
-DShot  Capture  Hardening
+   ╱    │    ╲         ╲
+  v     v     v         v
+P2     P3    P4        P4C          (can run in parallel)
+DShot  Capture  Harden  QSPI Flash
                                    ─── Dev Board boundary ───
-Phase 5 (8-ch PWM)      ← Custom PCB
+Phase 5 (8-ch PWM)      ← Custom PCB (note: PA12/PA14 conflict with QSPI)
     │
 Phase 6 (ADC/Power)     ← Custom PCB
     │
 Phase 7 (Versioning)    ← Custom PCB
 ```
+
+Note: Phase 4C (QSPI) has **no dependency** on Phase 1. It can start immediately after Phase 0
+or even in parallel with Phase 0, since it touches different files entirely.
 
 ## Effort Summary
 
@@ -571,14 +649,15 @@ Phase 7 (Versioning)    ← Custom PCB
 | 1 | API convergence + allocation + migration | L-XL | 3-4 weeks |
 | 2 | DShot Output (PWMC+XDMAC) | XL | 3-4 weeks |
 | 3 | Input Capture (TC-based) + RC integration | M | 1-2 weeks |
-| 4 | Production Hardening | M | 1 week |
+| 4 | Production Hardening (fault + watchdog) | M | 1 week |
+| 4C | QSPI Flash parameter/dataman storage | M | 1-2 days |
 | 5 | 8-Channel PWM (PCB) | M | 1 week |
 | 6 | ADC/Power (PCB) | M | 1 week |
 | 7 | HW Versioning (PCB) | M | 1-2 weeks |
-| **Total dev board (P0-P4)** | | | **~9-12 weeks** |
+| **Total dev board (P0-P4C)** | | | **~9-12 weeks** |
 | **Total with PCB (P0-P7)** | | | **~12-16 weeks + fab** |
 
-Note: Phase 1 effort increased from L (2-3 weeks) to L-XL (3-4 weeks) due to API convergence scope and consumer migration testing. Phase 3 increased from M (1 week) to M (1-2 weeks) due to serial/PPM RC coexistence integration.
+Note: Phase 1 effort increased from L (2-3 weeks) to L-XL (3-4 weeks) due to API convergence scope and consumer migration testing. Phase 3 increased from M (1 week) to M (1-2 weeks) due to serial/PPM RC coexistence integration. Phase 4C (QSPI) is fast (~1-2 days) because the SST26 flash is already on-board and NuttX has existing QSPI/SST26 drivers.
 
 ## Key Reference Files
 
@@ -599,6 +678,9 @@ Note: Phase 1 effort increased from L (2-3 weeks) to L-XL (3-4 weeks) due to API
 | NuttX XDMAC API | `platforms/nuttx/NuttX/nuttx/arch/arm/src/samv7/sam_xdmac.h` |
 | NuttX PWMC regs | `platforms/nuttx/NuttX/nuttx/arch/arm/src/samv7/hardware/sam_pwm.h` |
 | NuttX TC regs | `platforms/nuttx/NuttX/nuttx/arch/arm/src/samv7/hardware/sam_tc.h` |
+| NuttX QSPI driver | `platforms/nuttx/NuttX/nuttx/arch/arm/src/samv7/sam_qspi.c` |
+| NuttX SST26 MTD driver | `platforms/nuttx/NuttX/nuttx/drivers/mtd/sst26.c` |
+| QSPI implementation detail | `boards/microchip/samv71-xult-clickboards/QSPI_FLASH_IMPLEMENTATION_PLAN.md` |
 | Legacy (deprecated) | `platforms/nuttx/src/px4/microchip/samv7/io_pins/io_timer_tc.c` |
 | Legacy (deprecated) | `platforms/nuttx/src/px4/microchip/samv7/io_pins/io_timer_stub.c` |
 | Stale (superseded) | `boards/microchip/samv71-xult-clickboards/PRODUCTION_READINESS.md` |
