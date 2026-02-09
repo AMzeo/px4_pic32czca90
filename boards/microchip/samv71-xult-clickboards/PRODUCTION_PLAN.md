@@ -1,49 +1,151 @@
 # SAMV71 PX4 Port: Production Implementation Plan
 
+**Rev 2 — 2026-02-08** (addresses code review findings from Rev 1)
+
 ## Context
 
 The SAMV71-XULT PX4 port is currently a working prototype with 4-channel PWMC PWM, IMU, baro, mag, GPS, battery ADC, safety, SD card, USB, RC serial input, and HRT. The goal is to bring this to production quality as a general-purpose dev platform, with a custom production PCB planned. The primary gaps are: io_timer allocation API (foundation for everything else), DShot output, input capture for RC, and board-level production hardening.
 
 **Branch:** `samv7-custom`
 **User priorities:** IO timer API first, then DShot, bidirectional DShot deferred (architecture must allow it later)
+**Supersedes:** `PRODUCTION_READINESS.md` (stale — incorrectly states ADC missing, 3 TC channels)
 
 ---
 
-## Phase 0: Cleanup (Prerequisite)
+## Known Risks & Corrections (from Rev 1 review)
+
+| # | Severity | Finding | Correction in this rev |
+|---|----------|---------|----------------------|
+| 1 | Critical | `board_on_reset()` is a no-op (init.c:189) — safety hole exists NOW | Promoted to Phase 0 as production blocker |
+| 2 | Critical | API convergence with STM32 io_timer underscoped — consumers (pwm_servo, dshot, RPMCapture, PPSCapture) expect full typed enum, allocation tables, channel mapping, callback signatures | Phase 1 reframed as "API convergence + safety closure + migration" with explicit consumer compatibility matrix |
+| 3 | High | `PRODUCTION_READINESS.md` stale (says no ADC, 3 TC channels) | Marked superseded; Phase 0 adds deprecation header |
+| 4 | High | Phase 3 input capture not integrated with current serial RC strategy (`rc.board_defaults` uses UART4) | Phase 3 now includes param/startup integration and coexistence plan |
+| 5 | High | Phase 5 `PWMCPeripheral::C` missing from enum (only A/B); `MAX_IO_TIMERS` hardcoded to 4 not board-derived | Phase 1 fixes MAX_IO_TIMERS derivation; Phase 5 adds Periph C/D |
+| 6 | Medium | Debug instrumentation (absolute `getreg32`, `PX4_INFO` spam) is production blocker, not cleanup nice-to-have | Phase 0 reframed as production blocker |
+| 7 | Medium | Dead legacy files `io_timer_tc.c`, `io_timer_stub.c` still on disk (not in CMakeLists but confusing) | Phase 0 marks deprecated with header comments |
+| 8 | Medium | `initIOTimerChannel()` Timer5 → index 4, but `MAX_IO_TIMERS=4` (0-3 valid) — latent bounds issue | Phase 1 fixes MAX_IO_TIMERS to be board-derived via `BOARD_NUM_IO_TIMERS` |
+
+---
+
+## Phase 0: Safety Closure & Cleanup (Production Blocker)
 **Complexity: S | Dependency: None | Dev Board**
 
-Remove debug instrumentation from `io_timer_pwmc.c` before building the allocation layer on top.
+This phase closes an existing safety hole and removes debug instrumentation that obscures production code.
 
-### Files
-- `platforms/nuttx/src/px4/microchip/samv7/io_pins/io_timer_pwmc.c`
-  - Remove hardcoded absolute address reads (lines 267-270: `getreg32(0x40020220)`, lines 319-325: PIO register dumps)
-  - Convert `PX4_INFO` logging in init/set_rate to `PX4_DEBUG`
-  - Remove `(void)base;` / `(void)pwm_ch;` debug-suppression lines
-  - Gate any remaining diagnostics behind `#ifdef CONFIG_DEBUG_PWM`
-- Commit the 3 uncommitted files (delta doc updates, CDTYUPD cleanup)
+### 0A: Close `board_on_reset()` Safety Hole (CRITICAL)
+
+**File:** `boards/microchip/samv71-xult-clickboards/src/init.c`
+
+`board_on_reset()` at line 189 is already wired and called at boot (line 251) but does nothing.
+This means on any reset, PWM outputs remain in their last state — **motors can run uncontrolled**.
+
+Implement immediately (no dependency on Phase 1 allocation API — use direct register writes):
+```c
+__EXPORT void board_on_reset(int status)
+{
+    /* Disable all PWM0 channels immediately */
+    putreg32(0xF, SAM_PWM0_BASE + PWM_DIS_OFFSET);
+
+    /* Reconfigure motor GPIOs as output-low */
+    for (int i = 0; i < DIRECT_PWM_OUTPUT_CHANNELS; i++) {
+        /* Convert peripheral GPIO to output-low GPIO */
+        uint32_t gpio = timer_io_channels[i].gpio_out;
+        uint32_t gpio_output_low = (gpio & 0xFF) | GPIO_OUTPUT | GPIO_OUTPUT_CLEAR;
+        sam_configgpio(gpio_output_low);
+    }
+}
+```
+
+### 0B: Remove Debug Instrumentation (Production Blocker)
+
+**File:** `platforms/nuttx/src/px4/microchip/samv7/io_pins/io_timer_pwmc.c`
+- Remove hardcoded absolute address reads (lines 267-270: `getreg32(0x40020220)`, lines 319-325: PIO register dumps)
+- Convert `PX4_INFO` logging in `io_timer_init_timer`/`io_timer_set_rate` to `PX4_DEBUG`
+- Remove `(void)channel_handler;` / `(void)context;` debug-suppression lines (these will be used by Phase 1C)
+- Remove `(void)base;` / `(void)pwm_ch;` if present
+- Gate any remaining diagnostics behind `#ifdef CONFIG_DEBUG_PWM`
+
+### 0C: Mark Legacy Files Deprecated
+
+**Files:**
+- `platforms/nuttx/src/px4/microchip/samv7/io_pins/io_timer_tc.c` — Add header: `/* DEPRECATED: TC-based PWM replaced by PWMC (io_timer_pwmc.c). Retained for reference only. Do not add to CMakeLists. */`
+- `platforms/nuttx/src/px4/microchip/samv7/io_pins/io_timer_stub.c` — Same deprecation header
+
+### 0D: Mark Stale Docs Superseded
+
+**File:** `boards/microchip/samv71-xult-clickboards/PRODUCTION_READINESS.md`
+- Add header: `> **SUPERSEDED** by [PRODUCTION_PLAN.md](PRODUCTION_PLAN.md) as of 2026-02-08. This document contains stale information (e.g., incorrectly states ADC is missing, references 3 TC-based PWM channels). Refer to the production plan for current status.`
+
+### 0E: Commit Uncommitted Files
+
+- Stage and commit: delta doc updates, CDTYUPD cleanup, PWM frequency fix doc
 
 ### Verify
 - Build clean, no warnings
 - `actuator_test set -m 1 -v 0.5` still works on all 4 channels
+- `reboot` → oscilloscope confirms all PWM outputs go low immediately
 
 ---
 
-## Phase 1: IO Timer Allocation API
+## Phase 1: IO Timer API Convergence & Allocation
 **Complexity: L | Dependency: Phase 0 | Dev Board**
 
-Foundation phase. Every subsequent feature depends on proper timer/channel allocation with conflict detection, mode tracking, IRQ dispatch, and OneShot support.
+Foundation phase. Reframed from "allocation API" to **full API convergence with STM32 io_timer** — because every consumer (pwm_servo, dshot, input_capture, RPMCapture, PPSCapture) expects the STM32 signature contract.
 
-### 1A: Extend `io_timer.h` Data Structures
+### Consumer Compatibility Matrix
+
+These consumers call io_timer functions and must compile + work against the SAMV7 implementation:
+
+| Consumer | Functions Called | Current SAMV7 Status |
+|----------|----------------|---------------------|
+| `pwm_servo.c` (SAMV7) | `io_timer_channel_init(ch, PWMOut, NULL, NULL)`, `io_timer_set_ccr()`, `io_timer_set_enable()` | Works (minimal) |
+| `src/drivers/dshot/dshot.c` | `io_timer_allocate_timer()`, `io_timer_set_dshot_burst_mode()`, `io_timer_update_dma_req()`, `io_timer_unallocate_timer/channel()` | Not implemented |
+| `src/drivers/pwm_out/PWMOut.cpp` | `io_timer_channel_init()`, `io_timer_set_pwm_rate()`, `io_timer_set_ccr()`, `io_timer_get_group()` | Partially works |
+| `src/drivers/rpm/RPMCapture.cpp` | `io_timer_allocate_channel(ch, RPM)`, `io_timer_channel_get_gpio_output()`, `io_timer_unallocate_channel()` | Will fail |
+| `src/drivers/pps_capture/PPSCapture.cpp` | `io_timer_allocate_channel(ch, PPS)`, `io_timer_channel_get_as_pwm_input()`, `io_timer_unallocate_channel()` | Will fail |
+| `input_capture.c` (Phase 3) | `io_timer_channel_init(ch, Capture, handler, ctx)` with full callback signature | Will fail (wrong handler typedef) |
+| `board_on_reset()` (50+ boards) | `io_timer_channel_get_gpio_output(i)` in loop | Not implemented |
+
+### 1A: Converge `io_timer.h` with STM32 API
 
 **File:** `platforms/nuttx/src/px4/microchip/samv7/include/px4_arch/io_timer.h`
 
-**Add to `io_timers_t`:**
+**Current state:** `io_timer_channel_mode_t` is `typedef uint8_t` with `#define` constants, `channel_handler_t` takes only `void *context`, `io_timers_t` has no `clock_freq`/`dshot`, structs missing `masks`/`ccr_offset`.
+
+**Target state:** Match STM32 `io_timer.h` signatures exactly.
+
+**Changes:**
+
+1. **Fix `MAX_IO_TIMERS` derivation** (closes finding #8 bounds issue):
 ```c
-uint32_t     clock_freq;    // MCK frequency (150MHz)
-dshot_conf_t dshot;         // DShot DMA config (reserved for Phase 2)
+#ifdef BOARD_NUM_IO_TIMERS
+#define MAX_IO_TIMERS  BOARD_NUM_IO_TIMERS
+#else
+#define MAX_IO_TIMERS  2
+#endif
 ```
 
-**Add `dshot_conf_t`:**
+2. **Replace `uint8_t` typedef + `#define` with proper enum** (matches STM32 line 72):
+```c
+typedef enum io_timer_channel_mode_t {
+    IOTimerChanMode_NotUsed = 0,
+    IOTimerChanMode_PWMOut  = 1,
+    IOTimerChanMode_PWMIn   = 2,
+    IOTimerChanMode_Capture = 3,
+    IOTimerChanMode_OneShot = 4,
+    IOTimerChanMode_Trigger = 5,
+    IOTimerChanMode_Dshot   = 6,
+    IOTimerChanMode_LED     = 7,
+    IOTimerChanMode_PPS     = 8,
+    IOTimerChanMode_RPM     = 9,
+    IOTimerChanMode_Other   = 10,
+    IOTimerChanMode_DshotInverted = 11,
+    IOTimerChanMode_CaptureDMA = 12,
+    IOTimerChanModeSize
+} io_timer_channel_mode_t;
+```
+
+3. **Add `dshot_conf_t`** (before `io_timers_t`):
 ```c
 typedef struct dshot_conf_t {
     uint8_t  xdmac_ch_tx;     // XDMAC channel for PWM TX (13=PWM0, 39=PWM1)
@@ -52,92 +154,135 @@ typedef struct dshot_conf_t {
 } dshot_conf_t;
 ```
 
-**Add to `timer_io_channels_t`:**
+4. **Extend `io_timers_t`** to match STM32 (add `clock_freq`, `dshot`):
 ```c
-uint16_t masks;       // Channel bit in SR/ISR registers
-uint8_t  ccr_offset;  // Offset to CDTY from channel base
+typedef struct io_timers_t {
+    uint32_t     base;
+    uint32_t     clock_register;
+    uint32_t     clock_bit;
+    uint32_t     clock_freq;     // NEW: MCK frequency (150MHz)
+    uint32_t     vectorno;
+    dshot_conf_t dshot;          // NEW: DShot DMA config
+} io_timers_t;
 ```
 
-**Expand `io_timer_channel_mode_t` enum** (currently `uint8_t`) to full enum matching STM32:
-- Add `IOTimerChanMode_Dshot`, `IOTimerChanMode_DshotInverted`, `IOTimerChanMode_CaptureDMA`, `IOTimerChanModeSize`
+5. **Extend `timer_io_channels_t`** (add `masks`, `ccr_offset`):
+```c
+typedef struct timer_io_channels_t {
+    uint32_t  gpio_out;
+    uint32_t  gpio_in;
+    uint8_t   timer_index;
+    uint8_t   timer_channel;
+    uint16_t  masks;        // NEW: Channel bit in SR/ISR (1 << channel)
+    uint8_t   ccr_offset;   // NEW: Offset to CDTY from channel base
+} timer_io_channels_t;
+```
 
-**Add `channel_handler_t`** callback signature (matching STM32):
+6. **Fix `channel_handler_t` signature** to match STM32 (line 130):
 ```c
 typedef void (*channel_handler_t)(void *context, const io_timers_t *timer,
     uint32_t chan_index, const timer_io_channels_t *chan,
     hrt_abstime isrs_time, uint16_t isrs_rcnt);
 ```
 
-**Add `io_timers_channel_mapping_element_t`** struct with `first_channel_index`, `channel_count`, `lowest_timer_channel`, `channel_count_including_gaps`
-
-**Declare new functions:**
+7. **Add `io_timers_channel_mapping_element_t`** struct (matches STM32 line 108):
 ```c
+typedef struct io_timers_channel_mapping_element_t {
+    uint32_t first_channel_index;
+    uint32_t channel_count;
+    uint32_t lowest_timer_channel;
+    uint32_t channel_count_including_gaps;
+} io_timers_channel_mapping_element_t;
+
+typedef struct io_timers_channel_mapping_t {
+    io_timers_channel_mapping_element_t element[MAX_IO_TIMERS];
+} io_timers_channel_mapping_t;
+```
+
+8. **Update function declarations** to match STM32 signatures:
+```c
+int io_timer_init_timer(unsigned timer, io_timer_channel_mode_t mode);  // ADD mode param
 int io_timer_allocate_timer(unsigned timer, io_timer_channel_mode_t mode);
 int io_timer_unallocate_timer(unsigned timer);
 int io_timer_allocate_channel(unsigned channel, io_timer_channel_mode_t mode);
+int io_timer_unallocate_channel(unsigned channel);
 uint32_t io_timer_channel_get_gpio_output(unsigned channel);
+uint32_t io_timer_channel_get_as_pwm_input(unsigned channel);
 void io_timer_update_dma_req(uint8_t timer, bool enable);
 int io_timer_set_dshot_mode(uint8_t timer, unsigned dshot_pwm_freq);
+```
+
+9. **Add externs** for channel mapping:
+```c
+__EXPORT extern const io_timers_channel_mapping_t io_timers_channel_mapping;
 ```
 
 ### 1B: Update `io_timer_hw_description.h`
 
 **File:** `platforms/nuttx/src/px4/microchip/samv7/include/px4_arch/io_timer_hw_description.h`
 
-- `initIOPWMTimer()`: Populate `clock_freq`, `clock_register`, `clock_bit`, `vectorno`, `dshot.xdmac_ch_tx`
-- `initIOPWMChannel()`: Populate `masks = (1 << channel)`, `ccr_offset = 0x04`
-- `initIOTimerChannelMapping()`: Generate full mapping with `first_channel_index`, `channel_count`, etc.
+1. **`initIOPWMTimer()`**: Populate `clock_freq = BOARD_MCK_FREQUENCY` (150MHz), `vectorno` (SAM_IRQ_PWM0=31 / SAM_IRQ_PWM1=60), `dshot.xdmac_ch_tx` (13 for PWM0, 39 for PWM1)
+2. **`initIOPWMChannel()`**: Populate `masks = (1 << channel)`, `ccr_offset = 0x04` (CDTY offset within channel register block)
+3. **Replace `io_timers_channel_mapping_t`** — remove the local struct definition (line 140-142, currently `uint32_t element[]` bitmask) and use the proper `io_timers_channel_mapping_element_t` from `io_timer.h`
+4. **Rewrite `initIOTimerChannelMapping()`** to populate `first_channel_index`, `channel_count`, `lowest_timer_channel`, `channel_count_including_gaps` per timer
 
 ### 1C: Implement Allocation Logic in `io_timer_pwmc.c`
 
 **File:** `platforms/nuttx/src/px4/microchip/samv7/io_pins/io_timer_pwmc.c`
 
-**Add state tracking** (pattern from STM32 `io_timer.c` lines 293-493):
+**Add state tracking** (pattern from STM32 `io_timer.c`):
 ```c
-io_timer_channel_allocation_t channel_allocations[IOTimerChanModeSize] = { UINT16_MAX, 0 };
-static io_timer_channel_mode_t timer_allocations[MAX_IO_TIMERS] = {};
+static io_timer_channel_allocation_t channel_allocations[IOTimerChanModeSize];
+static io_timer_channel_mode_t timer_allocations[MAX_IO_TIMERS];
 static struct { channel_handler_t callback; void *context; } channel_handlers[MAX_TIMER_IO_CHANNELS];
 ```
 
+Initialize `channel_allocations[IOTimerChanMode_NotUsed] = UINT16_MAX` (all channels start as not-used).
+
 **Implement:**
-- `io_timer_allocate_timer()` / `io_timer_unallocate_timer()` — timer-level mode exclusivity
-- `io_timer_allocate_channel()` / `io_timer_unallocate_channel()` — channel-level bitmask tracking with critical sections
-- Refactor `io_timer_init_timer()` to accept mode, call `io_timer_allocate_timer()`, install PWMC IRQ handler
-- Refactor `io_timer_channel_init()` to call `io_timer_allocate_channel()`, support `IOTimerChanMode_Dshot`
+- `io_timer_allocate_timer()` / `io_timer_unallocate_timer()` — timer-level mode exclusivity with critical sections
+- `io_timer_allocate_channel()` / `io_timer_unallocate_channel()` — channel-level bitmask tracking with `irqsave`/`irqrestore`
+- Refactor `io_timer_init_timer()` to accept mode param, call `io_timer_allocate_timer()`, install PWMC IRQ handler
+- Refactor `io_timer_channel_init()` to call `io_timer_allocate_channel()`, store callback+context, support `IOTimerChanMode_Dshot` and `IOTimerChanMode_OneShot`
 - Refactor `io_timer_get_channel_mode()` and `io_timer_get_mode_channels()` to use `channel_allocations[]` array
-- Add `io_timer_channel_get_gpio_output()` — returns GPIO-output config for a channel pin (for DShot idle/safety)
+- `io_timer_channel_get_gpio_output()` — derive GPIO output-low config from `timer_io_channels[channel].gpio_out`
+- `io_timer_channel_get_as_pwm_input()` — return `timer_io_channels[channel].gpio_in`
 
 **Add IRQ handlers:**
 ```c
-static int io_timer_handler(uint16_t timer_index);  // Read ISR1, dispatch to callbacks
-static int io_timer_handler0(int irq, void *context, void *arg);  // PWM0
-static int io_timer_handler1(int irq, void *context, void *arg);  // PWM1
+static int io_timer_handler(uint16_t timer_index);  // Read ISR1, dispatch to channel_handlers[]
+static int io_timer_handler0(int irq, void *context, void *arg);  // PWM0 → io_timer_handler(0)
+static int io_timer_handler1(int irq, void *context, void *arg);  // PWM1 → io_timer_handler(1)
 ```
 
 **Add OneShot support:**
 - `io_timer_trigger()`: For OneShot channels, write CDTYUPD then use channel counter event ISR to disable after one period
 - `io_timer_set_enable()`: Support `IOTimerChanMode_OneShot` alongside `IOTimerChanMode_PWMOut`
 
-### 1D: PWM Safety on Reset
+**Migration risk mitigation:**
+- `pwm_servo.c` currently calls `io_timer_init_timer(timer)` with no mode — update to `io_timer_init_timer(timer, IOTimerChanMode_PWMOut)`
+- `io_timer_channel_init()` currently ignores `channel_handler`/`context` — now stores them for capture/RPM use
+- `io_timer_set_rate()` renamed to `io_timer_set_pwm_rate()` to match STM32 (add compatibility alias if needed)
 
-**File:** `boards/microchip/samv71-xult-clickboards/src/init.c`
+### 1D: Update Board Files
 
-Implement `board_on_reset()`:
-- Disable all PWMC channels (write PWM_DIS for both modules)
-- Reconfigure motor GPIOs as output-low via `io_timer_channel_get_gpio_output()`
-
-### 1E: Update `timer_config.cpp`
+**File:** `boards/microchip/samv71-xult-clickboards/src/board_config.h`
+- Add `#define BOARD_NUM_IO_TIMERS 1` (single PWM0 module on dev board)
+- Verify `DIRECT_PWM_OUTPUT_CHANNELS` = 4
 
 **File:** `boards/microchip/samv71-xult-clickboards/src/timer_config.cpp`
-
 - Update `io_timers_channel_mapping` to use new `io_timers_channel_mapping_element_t` struct
 
+**File:** `platforms/nuttx/src/px4/microchip/samv7/io_pins/pwm_servo.c`
+- Update `io_timer_init_timer(timer)` calls to `io_timer_init_timer(timer, IOTimerChanMode_PWMOut)`
+
 ### Verify
-- Build clean
-- `actuator_test set -m 1 -v 0.5` — existing 4-ch PWM still works
-- Allocation conflict: init same channel twice → returns `-EBUSY`
-- `io_timer_get_mode_channels(IOTimerChanMode_PWMOut)` returns correct bitmask
-- `reboot` → all PWM outputs go low (board_on_reset works)
+- Build clean, no warnings
+- `actuator_test set -m 1 -v 0.5` — existing 4-ch PWM still works (regression test)
+- Allocation conflict: `io_timer_allocate_channel(0, IOTimerChanMode_PWMOut)` twice → returns `-EBUSY`
+- `io_timer_get_mode_channels(IOTimerChanMode_PWMOut)` returns correct bitmask (0xF for 4 channels)
+- `io_timer_channel_get_gpio_output(0)` returns valid GPIO config
+- `reboot` → all PWM outputs go low (Phase 0A `board_on_reset` already working)
 
 ---
 
@@ -159,7 +304,7 @@ SAMV7 has no DMAR burst equivalent. Instead, use **PWMC Synchronous Channel Mode
 | DShot300 | 3.33 us | 1 (MCK/2) | 75 MHz | 250 | 187 | 93 |
 | DShot600 | 1.67 us | 1 (MCK/2) | 75 MHz | 125 | 93 | 46 |
 
-**DMA buffer layout:** 17 periods × 4 channels = 68 words per XDMAC transfer (16 data bits + 1 zero pad)
+**DMA buffer layout:** 17 periods x 4 channels = 68 words per XDMAC transfer (16 data bits + 1 zero pad)
 
 ### New Files
 - `platforms/nuttx/src/px4/microchip/samv7/include/px4_arch/dshot.h` — SAMV7-specific DShot defines
@@ -179,6 +324,11 @@ void dshot_motor_data_set(unsigned channel, uint16_t data, bool telemetry);
 - `io_timer_set_dshot_mode()`: Reconfigure PWMC for DShot timing (CPRE=1, CPRD per protocol)
 - `io_timer_update_dma_req()`: Enable/disable WRDY interrupt in IER2 for DMA triggering
 - `io_timer_channel_init()`: Handle `IOTimerChanMode_Dshot` (same GPIO setup as PWMOut, timing set by dshot.c)
+
+### API Compatibility Note
+STM32 consumers call `io_timer_set_dshot_burst_mode(timer, freq, dma_burst_length)` (3 params).
+SAMV7 uses `io_timer_set_dshot_mode(timer, freq)` (2 params) because PWMC Sync Mode handles distribution automatically — no burst length needed.
+The platform-specific DShot driver (`dshot.c`) is the only caller, so this signature difference is safe (each platform has its own dshot.c).
 
 ### Build System
 - `platforms/nuttx/src/px4/microchip/samv7/CMakeLists.txt`: Add `add_subdirectory(dshot)`
@@ -204,6 +354,19 @@ Architecture preserves clean path to bidirectional DShot:
 
 Input capture uses TC (Timer/Counter), not PWMC. TC5 on PC29/TIOA5 is already reserved for RC.
 
+### Integration with Current RC Strategy
+
+**Current state:** Board defaults use serial RC on UART4/ttyS3 (`rc.board_defaults` line 43: `RC_PORT_CONFIG 300`).
+**Pin conflict:** PD18 is used by both UART4 RX (serial RC) and TC5 (capture RC). Only one can be active.
+
+**Coexistence plan:**
+- Serial RC (SBUS/CRSF) and PPM capture are mutually exclusive on this board
+- Add `RC_INPUT_TYPE` param or use existing `RC_PORT_CONFIG` to select:
+  - `RC_PORT_CONFIG = 300` → UART4 serial RC (current default, SBUS/CRSF)
+  - `RC_PORT_CONFIG = 0` + PPM enabled → TC5 capture mode (PPM RC)
+- `rc.board_defaults` keeps serial RC as default (most common for modern receivers)
+- Startup script (`rc.board_sensors` or equivalent) must check param and configure pin accordingly
+
 ### New File
 - `platforms/nuttx/src/px4/microchip/samv7/io_pins/input_capture.c`
 
@@ -227,8 +390,10 @@ int up_input_capture_set_trigger(unsigned channel, input_capture_edge edge);
 - Add `input_capture.c` to `platforms/nuttx/src/px4/microchip/samv7/io_pins/CMakeLists.txt`
 
 ### Verify
-- PPM RC input on TC5/PC29: `rc_input` module receives valid channels
+- Serial RC (default): SBUS receiver on UART4 still works, TC5 not initialized
+- PPM RC (param switch): PPM receiver on TC5/PC29, `rc_input` module receives valid channels
 - Pulse widths match scope measurements (timing accuracy < 1us)
+- Switching between serial and PPM RC via param change + reboot works correctly
 
 ---
 
@@ -239,6 +404,7 @@ int up_input_capture_set_trigger(unsigned channel, input_capture_edge edge);
 **File:** `io_timer_pwmc.c`
 - Configure FMR/FPE/FPV registers: outputs go LOW on fault
 - Connect to software fault for `board_on_reset()` safety
+- Note: Phase 0A already provides basic reset safety via direct register writes; this phase adds hardware-level fault protection that works even if software is hung
 
 ### 4B: PWM Watchdog
 - HRT callback checks timestamp per channel
@@ -259,13 +425,46 @@ int up_input_capture_set_trigger(unsigned channel, input_capture_edge edge);
 ## Phase 5: 8-Channel PWM
 **Complexity: M | Dependency: Phase 1 | Custom PCB Required**
 
-### Add PWM1 Module
-**Files:** `timer_config.cpp`, `board_config.h`, `io_timer_hw_description.h`
+### Prerequisites from Phase 1
 
-- Add `PWMCPeripheral::C` to enum (needed for PWM1 pin functions)
+Phase 1 must have already fixed:
+- `MAX_IO_TIMERS` derived from `BOARD_NUM_IO_TIMERS` (not hardcoded to 4)
+- `io_timers_channel_mapping_element_t` with proper struct (not bitmask)
+
+### Add `PWMCPeripheral::C` and `::D`
+
+**File:** `platforms/nuttx/src/px4/microchip/samv7/include/px4_arch/hw_description.h`
+
+Current enum only has A/B. PWM1 pins use Peripheral C (and some use A), so the enum needs extension:
+```c
+enum class PWMCPeripheral {
+    A = 0,  /* GPIO_PERIPHA */
+    B = 1,  /* GPIO_PERIPHB */
+    C = 2,  /* GPIO_PERIPHC */
+    D = 3,  /* GPIO_PERIPHD */
+};
+```
+
+**File:** `platforms/nuttx/src/px4/microchip/samv7/include/px4_arch/io_timer_hw_description.h`
+
+Update `initIOPWMChannel()` GPIO mode encoding to handle C/D:
+```c
+uint32_t gpio_mode;
+switch (periph) {
+    case PWMCPeripheral::A: gpio_mode = (3 << 21); break;  // GPIO_PERIPHA
+    case PWMCPeripheral::B: gpio_mode = (4 << 21); break;  // GPIO_PERIPHB
+    case PWMCPeripheral::C: gpio_mode = (5 << 21); break;  // GPIO_PERIPHC
+    case PWMCPeripheral::D: gpio_mode = (6 << 21); break;  // GPIO_PERIPHD
+}
+```
+
+### Add PWM1 Module
+**Files:** `timer_config.cpp`, `board_config.h`
+
+- Update `BOARD_NUM_IO_TIMERS = 2` in board_config.h
 - Expand `io_timers[]` to include `initIOPWMTimer(PWM::PWM1)`
 - Add 4 more channels to `timer_io_channels[]` (PWM1 CH0-CH3)
-- Update `DIRECT_PWM_OUTPUT_CHANNELS = 8`, `BOARD_NUM_IO_TIMERS = 2`
+- Update `DIRECT_PWM_OUTPUT_CHANNELS = 8`
 - Enable `CONFIG_SAMV7_PWM1*` in defconfig
 
 PWM1 pin options (custom PCB selects):
@@ -316,10 +515,10 @@ PWM1 pin options (custom PCB selects):
 ## Dependency Graph
 
 ```
-Phase 0 (Cleanup)
+Phase 0 (Safety + Cleanup)  ← PRODUCTION BLOCKER
     │
     v
-Phase 1 (IO Timer Allocation API)  ← FOUNDATION
+Phase 1 (API Convergence + Allocation)  ← FOUNDATION
    ╱    │    ╲
   v     v     v
 P2     P3    P4          (can run in parallel)
@@ -336,16 +535,18 @@ Phase 7 (Versioning)    ← Custom PCB
 
 | Phase | Scope | Effort | Calendar |
 |-------|-------|--------|----------|
-| 0 | Cleanup + commit | S | 1 day |
-| 1 | IO Timer Allocation API | L | 2-3 weeks |
+| 0 | Safety closure + cleanup + deprecation | S | 1 day |
+| 1 | API convergence + allocation + migration | L-XL | 3-4 weeks |
 | 2 | DShot Output (PWMC+XDMAC) | XL | 3-4 weeks |
-| 3 | Input Capture (TC-based) | M | 1 week |
+| 3 | Input Capture (TC-based) + RC integration | M | 1-2 weeks |
 | 4 | Production Hardening | M | 1 week |
 | 5 | 8-Channel PWM (PCB) | M | 1 week |
 | 6 | ADC/Power (PCB) | M | 1 week |
 | 7 | HW Versioning (PCB) | M | 1-2 weeks |
-| **Total dev board (P0-P4)** | | | **~7-9 weeks** |
-| **Total with PCB (P0-P7)** | | | **~10-13 weeks + fab** |
+| **Total dev board (P0-P4)** | | | **~9-12 weeks** |
+| **Total with PCB (P0-P7)** | | | **~12-16 weeks + fab** |
+
+Note: Phase 1 effort increased from L (2-3 weeks) to L-XL (3-4 weeks) due to API convergence scope and consumer migration testing. Phase 3 increased from M (1 week) to M (1-2 weeks) due to serial/PPM RC coexistence integration.
 
 ## Key Reference Files
 
@@ -354,12 +555,18 @@ Phase 7 (Versioning)    ← Custom PCB
 | SAMV7 io_timer API | `platforms/nuttx/src/px4/microchip/samv7/include/px4_arch/io_timer.h` |
 | SAMV7 PWMC driver | `platforms/nuttx/src/px4/microchip/samv7/io_pins/io_timer_pwmc.c` |
 | SAMV7 HW description | `platforms/nuttx/src/px4/microchip/samv7/include/px4_arch/io_timer_hw_description.h` |
+| SAMV7 GPIO/PWM enums | `platforms/nuttx/src/px4/microchip/samv7/include/px4_arch/hw_description.h` |
 | STM32 io_timer (reference) | `platforms/nuttx/src/px4/stm/stm32_common/io_pins/io_timer.c` |
+| STM32 io_timer.h (reference) | `platforms/nuttx/src/px4/stm/stm32_common/include/px4_arch/io_timer.h` |
 | STM32 DShot (reference) | `platforms/nuttx/src/px4/stm/stm32_common/dshot/dshot.c` |
 | STM32 input_capture (reference) | `platforms/nuttx/src/px4/stm/stm32_common/io_pins/input_capture.c` |
 | Board config | `boards/microchip/samv71-xult-clickboards/src/board_config.h` |
 | Timer config | `boards/microchip/samv71-xult-clickboards/src/timer_config.cpp` |
 | Board init | `boards/microchip/samv71-xult-clickboards/src/init.c` |
+| Board defaults | `boards/microchip/samv71-xult-clickboards/init/rc.board_defaults` |
 | NuttX XDMAC API | `platforms/nuttx/NuttX/nuttx/arch/arm/src/samv7/sam_xdmac.h` |
 | NuttX PWMC regs | `platforms/nuttx/NuttX/nuttx/arch/arm/src/samv7/hardware/sam_pwm.h` |
 | NuttX TC regs | `platforms/nuttx/NuttX/nuttx/arch/arm/src/samv7/hardware/sam_tc.h` |
+| Legacy (deprecated) | `platforms/nuttx/src/px4/microchip/samv7/io_pins/io_timer_tc.c` |
+| Legacy (deprecated) | `platforms/nuttx/src/px4/microchip/samv7/io_pins/io_timer_stub.c` |
+| Stale (superseded) | `boards/microchip/samv71-xult-clickboards/PRODUCTION_READINESS.md` |
