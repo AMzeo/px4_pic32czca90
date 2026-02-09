@@ -482,7 +482,7 @@ board issue.
 ### MTD Partition Layout
 
 ```
-/dev/qspiflash0 (8MB)
+/dev/mtdqspi (8MB)
 +-- Partition 0: /fs/mtd_params     (128 KB, 32 blocks)  - System parameters
 +-- Partition 1: /fs/mtd_caldata    ( 64 KB, 16 blocks)  - Factory calibration
 +-- Partition 2: /fs/mtd_waypoints  (  2 MB, 512 blocks) - Mission/geofence/rally
@@ -623,13 +623,14 @@ PWM1 pin options (custom PCB selects):
 
 ```
 Phase 0 (Safety + Cleanup)  ← PRODUCTION BLOCKER
-    │
-    v
-Phase 1 (API Convergence + Allocation)  ← FOUNDATION
-   ╱    │    ╲         ╲
-  v     v     v         v
-P2     P3    P4        P4C          (can run in parallel)
-DShot  Capture  Harden  QSPI Flash
+    │              │
+    v              v
+Phase 1            P4C              (independent, parallel tracks)
+(API Convergence)  QSPI Flash
+   ╱    │    ╲
+  v     v     v
+P2     P3    P4
+DShot  Capture  Harden
                                    ─── Dev Board boundary ───
 Phase 5 (8-ch PWM)      ← Custom PCB (note: PA12/PA14 conflict with QSPI)
     │
@@ -639,7 +640,7 @@ Phase 7 (Versioning)    ← Custom PCB
 ```
 
 Note: Phase 4C (QSPI) has **no dependency** on Phase 1. It can start immediately after Phase 0
-or even in parallel with Phase 0, since it touches different files entirely.
+or even in parallel with Phase 0, since it touches entirely different files.
 
 ## Effort Summary
 
