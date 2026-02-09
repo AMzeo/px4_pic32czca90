@@ -387,8 +387,8 @@ Input capture uses TC (Timer/Counter), not PWMC. TC5 on PC29/TIOA5 is already re
 hardware conflict. Both could be configured simultaneously, but PX4 typically uses only one RC input
 method at a time.
 
-**Note:** PD18 does have a separate conflict (SD Card Detect vs UART4 RX), documented in the Known
-Pin Conflicts section of `MEMORY.md`. That conflict is unrelated to TC5 capture.
+**Note:** PD18 does have a separate conflict (SD Card Detect vs UART4 RX), documented in
+[SAMV71_PIN_MAP.md](SAMV71_PIN_MAP.md). That conflict is unrelated to TC5 capture.
 
 **Coexistence plan:**
 - Serial RC (SBUS/CRSF on UART4/PD18) is the default and most common for modern receivers
