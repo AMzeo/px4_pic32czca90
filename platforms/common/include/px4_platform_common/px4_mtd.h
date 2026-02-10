@@ -77,6 +77,14 @@ __EXPORT int  px4_mtd_get_geometry(const mtd_instance_s *instance, unsigned long
  */
 __EXPORT ssize_t px4_mtd_get_partition_size(const mtd_instance_s *instance, const char *partname);
 
+/*
+  Register a pre-built MTD instance with the px4_mtd query system.
+  Used by boards that do direct partitioning (bypassing px4_mtd_config)
+  to make their partitions visible to mft query / px4_mtd_query.
+  The caller retains ownership; the instance must remain valid.
+ */
+__EXPORT int px4_mtd_register_instance(mtd_instance_s *instance);
+
 int px4_at24c_initialize(FAR struct i2c_master_s *dev,
 			 uint8_t address, FAR struct mtd_dev_s **mtd_dev);
 

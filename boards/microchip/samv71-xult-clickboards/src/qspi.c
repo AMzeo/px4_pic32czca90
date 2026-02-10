@@ -40,10 +40,15 @@
  * which wraps the QSPI hardware as a standard SPI device for the NuttX
  * W25 MTD driver.
  *
- * Data flow:
+ * Data flow (init):
  *   sam_qspi_spi_initialize(0) -> struct spi_dev_s*
  *   w25_initialize(spi)        -> struct mtd_dev_s*
  *   register_mtddriver("/dev/mtdqspi") -> visible in NuttX VFS
+ *
+ * Data flow (partitions):
+ *   mtd_partition(mtd, offset, nblocks) -> sub-region MTD
+ *   ftl_initialize(minor, part_mtd)     -> /dev/mtdblockN
+ *   bchdev_register(blk, char, false)   -> /fs/mtd_params, /fs/mtd_waypoints
  *
  * Note: SAMV71-XULT board has S25FL116K (Spansion, JEDEC 01 40 15, 2MB)
  * not SST26VF064B as documented. The W25 driver handles S25FL1xx via
@@ -59,14 +64,35 @@
 
 #include <nuttx/spi/spi.h>
 #include <nuttx/mtd/mtd.h>
+#include <nuttx/drivers/drivers.h>
 
 #include "sam_qspi_spi.h"
+#include "board_config.h"
+
+#include <px4_platform_common/px4_mtd.h>
+#include <px4_platform_common/px4_manifest.h>
+#include <px4_platform_common/mtd_manifest.h>
 
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
 
 #define QSPI_FLASH_DEVPATH  "/dev/mtdqspi"
+
+/****************************************************************************
+ * Private Data
+ ****************************************************************************/
+
+static struct mtd_dev_s *g_qspi_mtd;
+
+/****************************************************************************
+ * Public Functions -- Accessors
+ ****************************************************************************/
+
+struct mtd_dev_s *board_get_qspi_mtd(void)
+{
+	return g_qspi_mtd;
+}
 
 /****************************************************************************
  * Public Functions -- Board callbacks required by sam_qspi_spi.c
@@ -183,6 +209,8 @@ int board_qspi_flash_init(void)
 		return -ENODEV;
 	}
 
+	g_qspi_mtd = mtd;
+
 	/* Step 4: Query geometry to log flash size */
 
 	ret = mtd->ioctl(mtd, MTDIOC_GEOMETRY, (unsigned long)((uintptr_t)&geo));
@@ -208,6 +236,140 @@ int board_qspi_flash_init(void)
 	}
 
 	printf("[boot] QSPI flash registered at %s\n", QSPI_FLASH_DEVPATH);
+	return OK;
+}
+
+/****************************************************************************
+ * Name: board_qspi_create_partitions
+ *
+ * Description:
+ *   Create MTD partitions on the QSPI flash for parameter and dataman
+ *   storage.  Each partition is exposed as a character device via
+ *   mtd_partition() -> ftl_initialize() -> bchdev_register().
+ *
+ *   Partition layout is defined in board_config.h in erase-sector units.
+ *   This function queries the MTD geometry at runtime and converts to
+ *   MTD block units (geo.blocksize) for mtd_partition().
+ *
+ *   Non-fatal: errors are logged but boot continues with SD-only storage.
+ *
+ * Input Parameters:
+ *   mtd - The parent MTD device (from w25_initialize)
+ *
+ * Returned Value:
+ *   OK on success (all partitions created), negative errno on first failure.
+ *
+ ****************************************************************************/
+
+int board_qspi_create_partitions(struct mtd_dev_s *mtd)
+{
+	struct mtd_geometry_s geo;
+	int ret;
+
+	ret = mtd->ioctl(mtd, MTDIOC_GEOMETRY, (unsigned long)((uintptr_t)&geo));
+
+	if (ret < 0) {
+		printf("[boot] QSPI partition: geometry query failed: %d\n", ret);
+		return ret;
+	}
+
+	/* Convert erase-sector counts to MTD block counts.
+	 * W25/S25FL: blocksize=256, erasesize=4096 -> blkpererase=16
+	 */
+	int blkpererase = geo.erasesize / geo.blocksize;
+
+	printf("[boot] QSPI partition: blksize=%lu erase=%lu blk/erase=%d\n",
+	       (unsigned long)geo.blocksize, (unsigned long)geo.erasesize,
+	       blkpererase);
+
+	/* Partition table: { name, path, offset_esect, size_esect, ftl_minor, mtd_type }
+	 * mtd_type is used by px4_mtd_query() to satisfy rcS "mft query" commands.
+	 */
+	static const struct {
+		const char *name;
+		const char *path;
+		int offset_esect;
+		int size_esect;
+		int ftl_minor;
+		int mtd_type;
+	} parts[] = {
+		{ "params",    "/fs/mtd_params",    QSPI_PART_PARAMS_OFFSET,
+		  QSPI_PART_PARAMS_SECTORS,    0, MTD_PARAMETERS },
+		{ "caldata",   "/fs/mtd_caldata",   QSPI_PART_CALDATA_OFFSET,
+		  QSPI_PART_CALDATA_SECTORS,   1, MTD_CALDATA },
+		{ "waypoints", "/fs/mtd_waypoints", QSPI_PART_WAYPOINTS_OFFSET,
+		  QSPI_PART_WAYPOINTS_SECTORS, 2, MTD_WAYPOINTS },
+	};
+
+	const unsigned nparts = sizeof(parts) / sizeof(parts[0]);
+
+	/* Create each partition: mtd_partition -> ftl -> bchdev */
+
+	for (unsigned i = 0; i < nparts; i++) {
+		off_t first_block = (off_t)parts[i].offset_esect * blkpererase;
+		off_t num_blocks  = (off_t)parts[i].size_esect * blkpererase;
+
+		struct mtd_dev_s *part = mtd_partition(mtd, first_block, num_blocks);
+
+		if (part == NULL) {
+			printf("[boot] QSPI partition %u (%s): mtd_partition failed\n",
+			       i, parts[i].name);
+			return -ENOMEM;
+		}
+
+		ret = ftl_initialize(parts[i].ftl_minor, part);
+
+		if (ret < 0) {
+			printf("[boot] QSPI partition %u (%s): ftl_initialize failed: %d\n",
+			       i, parts[i].name, ret);
+			return ret;
+		}
+
+		char blkdev[20];
+		snprintf(blkdev, sizeof(blkdev), "/dev/mtdblock%d", parts[i].ftl_minor);
+
+		ret = bchdev_register(blkdev, parts[i].path, false);
+
+		if (ret < 0) {
+			printf("[boot] QSPI partition %u (%s): bchdev_register failed: %d\n",
+			       i, parts[i].name, ret);
+			return ret;
+		}
+
+		printf("[boot] QSPI partition %u: %s (%d KB)\n",
+		       i, parts[i].path,
+		       (int)(parts[i].size_esect * geo.erasesize / 1024));
+	}
+
+	/* Register with px4_mtd so "mft query -k MTD -s MTD_CALDATA ..."
+	 * in rcS can find our partitions.  Build a static mtd_instance_s.
+	 */
+	static mtd_instance_s qspi_instance;
+	static int            qspi_block_counts[QSPI_NUM_PARTITIONS];
+	static int            qspi_types[QSPI_NUM_PARTITIONS];
+	static const char    *qspi_names[QSPI_NUM_PARTITIONS];
+
+	qspi_instance.mtd_dev               = mtd;
+	qspi_instance.partition_block_counts = qspi_block_counts;
+	qspi_instance.partition_types        = qspi_types;
+	qspi_instance.partition_names        = qspi_names;
+	qspi_instance.part_dev               = NULL;
+	qspi_instance.devid                  = 0;
+	qspi_instance.n_partitions_current   = nparts;
+
+	for (unsigned i = 0; i < nparts; i++) {
+		qspi_block_counts[i] = parts[i].size_esect * blkpererase;
+		qspi_types[i]        = parts[i].mtd_type;
+		qspi_names[i]        = parts[i].path;
+	}
+
+	ret = px4_mtd_register_instance(&qspi_instance);
+
+	if (ret < 0) {
+		printf("[boot] QSPI mtd instance registration failed: %d\n", ret);
+		return ret;
+	}
+
 	return OK;
 }
 

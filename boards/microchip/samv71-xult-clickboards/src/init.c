@@ -110,9 +110,7 @@ extern uint32_t _e_nocache;
 /* Board MPU nocache region init (sam_mpuinit.c) */
 extern void board_mpu_nocache_init(void);
 
-#ifdef CONFIG_SAMV7_QSPI_SPI_MODE
-extern int board_qspi_flash_init(void);
-#endif
+/* QSPI flash functions declared in board_config.h */
 
 __END_DECLS
 
@@ -348,23 +346,15 @@ __EXPORT int board_app_initialize(uintptr_t arg)
 		printf("[boot] QSPI flash init failed: %d (continuing)\n", qspi_ret);
 
 	} else {
-#  ifdef CONFIG_FS_LITTLEFS
-		/* Mount LittleFS on QSPI flash.
-		 * "autoformat" mounts existing filesystem, or formats then mounts
-		 * if no valid superblock is found. Files persist across reboots.
-		 */
-		(void)mkdir("/mnt", 0777);
-		(void)mkdir("/mnt/qspi", 0777);
+		struct mtd_dev_s *qspi_mtd = board_get_qspi_mtd();
 
-		int mnt_ret = mount("/dev/mtdqspi", "/mnt/qspi", "littlefs", 0, "autoformat");
+		if (qspi_mtd) {
+			int part_ret = board_qspi_create_partitions(qspi_mtd);
 
-		if (mnt_ret < 0) {
-			printf("[boot] LittleFS mount failed: errno %d (continuing)\n", errno);
-		} else {
-			printf("[boot] LittleFS mounted at /mnt/qspi\n");
+			if (part_ret < 0) {
+				printf("[boot] QSPI partition setup failed: %d (continuing)\n", part_ret);
+			}
 		}
-
-#  endif
 	}
 
 #endif
@@ -406,7 +396,7 @@ __EXPORT int board_app_initialize(uintptr_t arg)
 		syslog(LOG_ERR, "[boot] Hardfault init FAILED\n");
 	}
 
-	syslog(LOG_INFO, "[boot] Parameters will be stored on /fs/microsd/params\n");
+	syslog(LOG_INFO, "[boot] Parameters on /fs/mtd_params (QSPI), backup on SD\n");
 
 	syslog(LOG_INFO, "[boot] Board initialization complete\n");
 

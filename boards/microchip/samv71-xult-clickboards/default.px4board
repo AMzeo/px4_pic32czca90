@@ -1,8 +1,8 @@
 CONFIG_BOARD_TOOLCHAIN="arm-none-eabi"
 CONFIG_BOARD_ARCHITECTURE="cortex-m7"
 CONFIG_BOARD_ROOT_PATH="/fs/microsd"
-CONFIG_BOARD_PARAM_FILE="/fs/microsd/params"
-CONFIG_BOARD_PARAM_BACKUP_FILE="/fs/microsd/params.bak"
+CONFIG_BOARD_PARAM_FILE="/fs/mtd_params"
+CONFIG_BOARD_PARAM_BACKUP_FILE="/fs/microsd/parameters_backup.bson"
 # CONFIG_BOARD_CONSTRAINED_FLASH is not set
 # CONFIG_BOARD_NO_HELP is not set
 CONFIG_BOARD_EXTERNAL_METADATA=y
@@ -95,7 +95,6 @@ CONFIG_MODULES_SENSORS=y
 
 # System Commands
 CONFIG_SYSTEMCMDS_BSONDUMP=y
-CONFIG_SYSTEMCMDS_LITTLEFS_MOUNT=y
 CONFIG_SYSTEMCMDS_MFT=y
 CONFIG_SYSTEMCMDS_DMESG=y  # Re-enabled: lazy init fix in console_buffer.cpp
 # CONFIG_SYSTEMCMDS_HARDFAULT_LOG is not set  # Requires HAS_PROGMEM infrastructure (not yet implemented for SAMV7)

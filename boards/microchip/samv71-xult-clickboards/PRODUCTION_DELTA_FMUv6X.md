@@ -19,14 +19,16 @@
 | **SD Card** | ✅ | HSMCI0 with card detect (PD18) |
 | **USB CDC/ACM** | ✅ | MAVLink console |
 | **Logger** | ✅ | SD card logging |
-| **Parameters** | ✅ | SD card storage |
+| **Parameters** | ✅ | QSPI flash (/fs/mtd_params), SD backup |
 | **MAVLink** | ✅ | USB + UART telemetry |
 | **RC Input (Serial)** | ✅ | UART3 (SBUS/CRSF) |
 | **High-Resolution Timer** | ✅ | TC0 CH0 |
 | **I2C Bus (TWIHS0)** | ✅ | Single bus, all sensors |
 | **SPI Bus (SPI0)** | ✅ | Single bus, IMU + Baro |
 | **Status LED** | ✅ | PA23 (Blue) |
-| **QSPI Flash (S25FL116K)** | ✅ | 2MB, LittleFS at /mnt/qspi, persistence verified |
+| **QSPI Flash (S25FL116K)** | ✅ | 2MB, MTD partitions (params+caldata+waypoints) |
+| **Caldata Backup** | ✅ | /fs/mtd_caldata (64 KB), survives param reset_all |
+| **Dataman (Missions)** | ✅ | /fs/mtd_waypoints (512 KB), persistent across reboots |
 | **IO Timer Allocation API** | ✅ | Converged with STM32 signatures |
 | **PA7/XIN32 Conflict** | ✅ | FIXED - Motor 1 on PC13 |
 
@@ -40,7 +42,7 @@
 | **IO Timer Allocation API** | ✅ Done | 0 | No |
 | **OneShot125/42** | Must-Have | Incl. in DShot | Yes |
 | **PWM Channels 5-8** | Should-Have | 16-24 | No |
-| **EEPROM/FRAM Params** | Should-Have | 16-24 | No |
+| **EEPROM/FRAM Params** | ✅ Done (QSPI) | 0 | No |
 | **Power Rail Control** | Should-Have | 8-12 | No |
 | **USB Valid Detect** | Should-Have | 4-8 | No |
 | **5V Peripheral Enable** | Should-Have | 4-8 | No |
@@ -63,7 +65,7 @@
 | **RC Input** | ⚠️ Partial | Serial only, no PPM/PWM capture |
 | **SD Card Detect** | ⚠️ Conflict | PD18 conflicts with TC5 (RC capture) |
 | **CAN Bus** | ⚠️ Untested | Hardware present, driver not validated |
-| **QSPI Flash** | ✅ Working | S25FL116K 2MB, LittleFS at /mnt/qspi |
+| **QSPI Flash** | ✅ Working | S25FL116K 2MB, MTD partitions (params+caldata+waypoints) |
 | **Safety Button** | ⚠️ Conflict | PA9 conflicts with UART0_RXD |
 | **Motor 4 (PB0)** | ⚠️ Conflict | Conflicts with UART0_TXD |
 | **USB Bootloader** | ⚠️ SAM-BA only | ROM bootloader works, PX4-style not implemented |
@@ -82,7 +84,7 @@ This document provides a comprehensive comparison between the SAMV71-XULT-Clickb
 | DShot Support | Yes (DMA burst) | No | Missing |
 | Power Management | Full (rails, bricks, USB) | None | Missing |
 | Sensor Redundancy | 3x IMU, 2x Baro | 1x each | None |
-| Storage Redundancy | EEPROM + SD | SD + QSPI flash (2MB LittleFS) | Improved |
+| Storage Redundancy | EEPROM + SD | QSPI flash (params+caldata+waypoints) + SD | ✅ Parity |
 | Communications | CAN FD + Ethernet + USB OTG | CAN (untested) + USB device | Limited |
 
 ---
@@ -130,13 +132,15 @@ This document provides a comprehensive comparison between the SAMV71-XULT-Clickb
 
 | Feature | FMUv6X | SAMV71-XULT | Impact |
 |---------|--------|-------------|--------|
-| Primary param storage | I2C EEPROM/FRAM | SD card | Higher failure risk |
-| Backup storage | SD card | QSPI flash (LittleFS) | ✅ Available |
-| MTD EEPROM devices | 2 (base + IMU cal) | 0 (MTD partitions deferred) | Deferred |
-| QSPI flash | No | ✅ S25FL116K 2MB (LittleFS) | Working |
+| Primary param storage | I2C EEPROM/FRAM | ✅ QSPI flash (/fs/mtd_params) | ✅ Parity |
+| Param backup | SD card | ✅ SD card (parameters_backup.bson) | ✅ Parity |
+| Caldata backup | MTD partition | ✅ QSPI flash (/fs/mtd_caldata) | ✅ Parity |
+| Dataman (missions) | MTD partition | ✅ QSPI flash (/fs/mtd_waypoints) | ✅ Parity |
+| QSPI flash | No | ✅ S25FL116K 2MB (3 MTD partitions) | Working |
 
-**Impact:** Parameters currently on SD card. QSPI flash (2 MB LittleFS at /mnt/qspi) is available
-for backup storage. MTD partitions for direct parameter/dataman storage are planned (Phase 4C-2).
+**Impact:** ✅ **Storage at production parity.** Parameters on QSPI flash survive SD card
+removal. Caldata survives `param reset_all`. Missions/geofence/rally points persist across
+reboots via dataman on QSPI. SD card used for flight logs, param backups, and crash dumps.
 
 ### 1.5 Sensor Redundancy & Thermal Management
 
@@ -302,16 +306,23 @@ for backup storage. MTD partitions for direct parameter/dataman storage are plan
 | **Changes** | Channel mapping, output groups, params |
 | **Effort** | 16-24 hours |
 
-#### 8. Parameter Storage Redundancy
+#### 8. Parameter Storage Redundancy — ✅ DONE (Phase 4C-2)
 
 | Aspect | Details |
 |--------|---------|
-| **Goal** | EEPROM/FRAM backend for parameters (survives SD failure) |
-| **New files** | `boards/microchip/samv71-xult-clickboards/src/mtd.cpp` |
-| **Modified files** | `boards/microchip/samv71-xult-clickboards/src/board_config.h` |
-| | NuttX defconfig (enable MTD, I2C EEPROM) |
-| **Hardware** | Add I2C EEPROM/FRAM to board |
-| **Effort** | 16-24 hours |
+| **Goal** | Non-volatile backend for parameters (survives SD failure) |
+| **Solution** | QSPI flash MTD partitions (replaces planned EEPROM/FRAM) |
+| **Modified files** | `src/qspi.c` (partition creation + px4_mtd registration) |
+| | `src/board_config.h` (partition layout defines) |
+| | `src/init.c` (replaced LittleFS with partition setup) |
+| | `default.px4board` (param file → /fs/mtd_params) |
+| | `nuttx-config/nsh/defconfig` (BCH, removed LittleFS) |
+| | `init/rc.board_defaults` (dataman start) |
+| | `init/rc.board_extras` (navigator start) |
+| | `platforms/common/include/px4_platform_common/px4_mtd.h` (new API) |
+| | `platforms/nuttx/src/px4/common/px4_mtd.cpp` (register_instance) |
+| **Partitions** | /fs/mtd_params (128 KB), /fs/mtd_caldata (64 KB), /fs/mtd_waypoints (512 KB) |
+| **Verified** | Param persistence, caldata mft query, dataman running, stack warning fixed |
 
 #### 9. Power Rail Control + Validation
 
@@ -410,10 +421,10 @@ for backup storage. MTD partitions for direct parameter/dataman storage are plan
 | Category | Items | Hours |
 |----------|-------|-------|
 | **Must-Have (remaining)** | 1, 4-5 | 80-112 |
-| **Should-Have** | 7-12 | 104-176 |
+| **Should-Have (remaining)** | 7, 9-12 | 88-152 |
 | **Nice-to-Have** | 13-15 | 16-28 |
 | **Total remaining** | | **200-316** |
-| ~~Completed~~ | ~~2, 3, 6, QSPI~~ | ~~Done~~ |
+| ~~Completed~~ | ~~2, 3, 6, 8, QSPI~~ | ~~Done~~ |
 
 ### Must-Have Breakdown
 
@@ -431,7 +442,7 @@ for backup storage. MTD partitions for direct parameter/dataman storage are plan
 | Item | Hours |
 |------|-------|
 | 7. PWM outputs to 8+ | 16-24 |
-| 8. Parameter storage (EEPROM) | 16-24 |
+| 8. Parameter storage (QSPI MTD) | ✅ Done |
 | 9. Power rail control | 8-12 |
 | 10. ADC expansion | 8-12 |
 | 11. Sensor redundancy | 16-24 |
@@ -523,14 +534,17 @@ platforms/nuttx/src/px4/stm/stm32_common/include/px4_arch/dshot.h
 ```
 boards/microchip/samv71-xult-clickboards/src/board_config.h
 boards/microchip/samv71-xult-clickboards/src/timer_config.cpp
-boards/microchip/samv71-xult-clickboards/src/qspi.c
+boards/microchip/samv71-xult-clickboards/src/qspi.c          (MTD partitions + px4_mtd registration)
 boards/microchip/samv71-xult-clickboards/src/init.c
 boards/microchip/samv71-xult-clickboards/default.px4board
-boards/microchip/samv71-xult-clickboards/QSPI_FILESYSTEM.md
+boards/microchip/samv71-xult-clickboards/init/rc.board_defaults  (dataman start)
+boards/microchip/samv71-xult-clickboards/init/rc.board_extras    (navigator start)
 boards/microchip/samv71-xult-clickboards/PRODUCTION_PLAN.md
 platforms/nuttx/src/px4/microchip/samv7/io_pins/io_timer_pwmc.c
 platforms/nuttx/src/px4/microchip/samv7/include/px4_arch/io_timer.h
-platforms/nuttx/NuttX/nuttx/arch/arm/src/samv7/sam_qspi_spi.c  (4 bugs fixed)
+platforms/common/include/px4_platform_common/px4_mtd.h           (px4_mtd_register_instance API)
+platforms/nuttx/src/px4/common/px4_mtd.cpp                       (px4_mtd_register_instance impl)
+platforms/nuttx/NuttX/nuttx/arch/arm/src/samv7/sam_qspi_spi.c   (4 bugs fixed)
 ```
 
 ---
@@ -544,7 +558,7 @@ The SAMV71-XULT is **suitable** for:
 - Basic flight testing with PWM ESCs (50-400 Hz, dynamic prescaler)
 - Sensor integration development
 - Ground vehicle/rover applications
-- QSPI flash storage prototyping (LittleFS filesystem)
+- Persistent parameter/caldata/mission storage (QSPI flash MTD partitions)
 - Educational purposes
 
 **Not suitable** for:
@@ -574,4 +588,4 @@ The SAMV71-XULT is **suitable** for:
 *Document Version: 3.0*
 *Date: 2026-02-10*
 *Format: Master feature list + Production-parity implementation checklist*
-*Updated: Phase 0/1/4C completed, IO Timer API converged, QSPI flash working*
+*Updated: Phase 0/1/4C-2 completed, IO Timer API converged, QSPI MTD partitions (params+caldata+waypoints) verified on hardware*

@@ -41,3 +41,7 @@ param set-default SER_GPS1_BAUD 57600
 # RC Input Configuration
 # RC on UART4 = /dev/ttyS3 (J505 pin 3: PD18)
 param set-default RC_PORT_CONFIG 300
+
+# Dataman on QSPI flash (persistent mission/geofence/rally storage)
+# Started here (before rcS dataman section) so storage is available early.
+dataman start -f /fs/mtd_waypoints

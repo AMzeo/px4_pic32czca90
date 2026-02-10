@@ -211,7 +211,30 @@
 
 #ifdef CONFIG_SAMV7_QSPI_SPI_MODE
 #define BOARD_HAS_QSPI_FLASH   1
-#endif
+
+/* QSPI Flash Partition Layout (in erase sectors; S25FL116K uses 4 KB sectors)
+ *
+ * | Partition | Path             | Sectors | Size   | Purpose                      |
+ * |-----------|------------------|---------|--------|------------------------------|
+ * | 0         | /fs/mtd_params   | 32      | 128 KB | System parameters (BSON)     |
+ * | 1         | /fs/mtd_caldata  | 16      |  64 KB | Factory calibration backup   |
+ * | 2         | /fs/mtd_waypoints| 128     | 512 KB | Dataman (missions, etc.)     |
+ * | Reserved  | —                | 336     | 1344KB | Future use                   |
+ * | Total     |                  | 512     | 2048KB |                              |
+ *
+ * mtd_partition() takes MTD blocks (geo.blocksize), not erase sectors.
+ * Conversion: mtd_blocks = erase_sectors * (geo.erasesize / geo.blocksize)
+ */
+#define QSPI_PART_PARAMS_OFFSET     0     /* erase sector offset */
+#define QSPI_PART_PARAMS_SECTORS    32    /* 128 KB */
+#define QSPI_PART_CALDATA_OFFSET    32    /* erase sector offset */
+#define QSPI_PART_CALDATA_SECTORS   16    /*  64 KB */
+#define QSPI_PART_WAYPOINTS_OFFSET  48    /* erase sector offset */
+#define QSPI_PART_WAYPOINTS_SECTORS 128   /* 512 KB */
+
+#define QSPI_NUM_PARTITIONS         3
+
+#endif /* CONFIG_SAMV7_QSPI_SPI_MODE */
 
 /* HSMCI SD Card ***************************************************************************/
 
@@ -279,6 +302,13 @@ __BEGIN_DECLS
 extern void sam_usbinitialize(void);
 
 extern void board_peripheral_reset(int ms);
+
+#ifdef CONFIG_SAMV7_QSPI_SPI_MODE
+#include <nuttx/mtd/mtd.h>
+extern int board_qspi_flash_init(void);
+extern struct mtd_dev_s *board_get_qspi_mtd(void);
+extern int board_qspi_create_partitions(struct mtd_dev_s *mtd);
+#endif
 
 #include <px4_platform_common/board_common.h>
 

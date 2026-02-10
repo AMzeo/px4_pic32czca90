@@ -439,6 +439,21 @@ errout:
 	return rv;
 }
 
+__EXPORT int px4_mtd_register_instance(mtd_instance_s *instance)
+{
+	if (instance == nullptr) {
+		return -EINVAL;
+	}
+
+	if (num_instances >= (int)MAX_MTD_INSTANCES) {
+		PX4_ERR("mtd register: max instances reached (%u)", MAX_MTD_INSTANCES);
+		return -ENOMEM;
+	}
+
+	instances[num_instances++] = instance;
+	return 0;
+}
+
 __EXPORT int px4_mtd_query(const char *sub, const char *val, const char **get)
 {
 	int rv = -ENODEV;
