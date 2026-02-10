@@ -1,6 +1,6 @@
 # SAMV71 PX4 Port: Production Implementation Plan
 
-**Rev 2 — 2026-02-08** (addresses code review findings from Rev 1)
+**Rev 3 — 2026-02-10** (Phase 0, Phase 1, Phase 4C completed)
 
 ## Context
 
@@ -27,288 +27,50 @@ The SAMV71-XULT PX4 port is currently a working prototype with 4-channel PWMC PW
 
 ---
 
-## Phase 0: Safety Closure & Cleanup (Production Blocker)
+## Phase 0: Safety Closure & Cleanup ~~(Production Blocker)~~ DONE
 **Complexity: S | Dependency: None | Dev Board**
+**Status: COMPLETE** — Committed `9a35d09e23` (2026-02-08)
 
-This phase closes an existing safety hole and removes debug instrumentation that obscures production code.
+All sub-phases completed:
+- **0A** `board_on_reset()` — Disables all PWM0 channels and drives motor GPIOs low on any reset
+- **0B** Debug instrumentation removed from `io_timer_pwmc.c`
+- **0C** Legacy files (`io_timer_tc.c`, `io_timer_stub.c`) marked deprecated
+- **0D** Stale docs (`PRODUCTION_READINESS.md`, `QSPI_FLASH_IMPLEMENTATION_PLAN.md`) marked superseded
+- **0E** Uncommitted files staged and committed
 
-### 0A: Close `board_on_reset()` Safety Hole (CRITICAL)
-
-**File:** `boards/microchip/samv71-xult-clickboards/src/init.c`
-
-`board_on_reset()` at line 189 is already wired and called at boot (line 251) but does nothing.
-This means on any reset, PWM outputs remain in their last state — **motors can run uncontrolled**.
-
-Implement immediately (no dependency on Phase 1 allocation API — use direct register writes with
-local constants defined in init.c). `PWM_DIS_OFFSET` is not in any shared header — it is defined
-locally in `io_timer_pwmc.c`. For safety-critical reset code, define concrete constants in init.c
-rather than depending on driver internals.
-
-**Required includes** (already present in init.c): `board_config.h` → `sam_gpio.h` (provides
-`sam_configgpio()`, `GPIO_OUTPUT`, `GPIO_OUTPUT_CLEAR`, `GPIO_PORT_PIOx`, `GPIO_PIN*`);
-`px4_arch/io_timer.h` (provides `timer_io_channels[]`).
-
-```c
-/*
- * Local PWMC register constants for reset safety.
- * Defined here (not imported from driver) so reset works even if
- * the driver has not been linked or initialized.
- */
-#define SAMV7_PWM0_BASE     0x40020000
-#define SAMV7_PWM_DIS       0x008       /* PWM Disable Register offset */
-#define SAMV7_PWM_DIS_ALL   0x0F        /* Channels 0-3 disable mask */
-
-__EXPORT void board_on_reset(int status)
-{
-    /* 1. Disable all PWM0 channels via hardware register */
-    putreg32(SAMV7_PWM_DIS_ALL, SAMV7_PWM0_BASE + SAMV7_PWM_DIS);
-
-    /* 2. Reconfigure each motor GPIO from peripheral-mux to output-low.
-     *    GPIO encoding (sam_gpio.h):
-     *      bits 21-23 = mode (GPIO_OUTPUT = 2 << 21)
-     *      bits 16-20 = config (GPIO_CFG_DEFAULT = 0)
-     *      bit  12    = initial value (GPIO_OUTPUT_CLEAR = 0 → low)
-     *      bits 5-7   = port, bits 0-4 = pin
-     *    We preserve port+pin from the channel's gpio_out and replace mode.
-     */
-    for (int i = 0; i < DIRECT_PWM_OUTPUT_CHANNELS; i++) {
-        uint32_t pin_id = timer_io_channels[i].gpio_out & (GPIO_PORT_MASK | GPIO_PIN_MASK);
-        sam_configgpio(GPIO_OUTPUT | GPIO_CFG_DEFAULT | GPIO_OUTPUT_CLEAR | pin_id);
-    }
-}
-```
-
-**After Phase 1 lands:** Replace the loop body with `io_timer_channel_get_gpio_output()` for
-consistency with other PX4 boards. The direct-register approach above is intentionally self-contained
-so it works even before Phase 1 allocation API exists.
-
-### 0B: Remove Debug Instrumentation (Production Blocker)
-
-**File:** `platforms/nuttx/src/px4/microchip/samv7/io_pins/io_timer_pwmc.c`
-- Remove hardcoded absolute address reads (lines 267-270: `getreg32(0x40020220)`, lines 319-325: PIO register dumps)
-- Convert `PX4_INFO` logging in `io_timer_init_timer`/`io_timer_set_rate` to `PX4_DEBUG`
-- Remove `(void)channel_handler;` / `(void)context;` debug-suppression lines (these will be used by Phase 1C)
-- Remove `(void)base;` / `(void)pwm_ch;` if present
-- Gate any remaining diagnostics behind `#ifdef CONFIG_DEBUG_PWM`
-
-### 0C: Mark Legacy Files Deprecated
-
-**Files:**
-- `platforms/nuttx/src/px4/microchip/samv7/io_pins/io_timer_tc.c` — Add header: `/* DEPRECATED: TC-based PWM replaced by PWMC (io_timer_pwmc.c). Retained for reference only. Do not add to CMakeLists. */`
-- `platforms/nuttx/src/px4/microchip/samv7/io_pins/io_timer_stub.c` — Same deprecation header
-
-### 0D: Mark Stale Docs Superseded
-
-**File:** `boards/microchip/samv71-xult-clickboards/PRODUCTION_READINESS.md`
-- Add header: `> **SUPERSEDED** by [PRODUCTION_PLAN.md](PRODUCTION_PLAN.md) as of 2026-02-08. This document contains stale information (e.g., incorrectly states ADC is missing, references 3 TC-based PWM channels). Refer to the production plan for current status.`
-
-### 0E: Commit Uncommitted Files
-
-- Stage and commit: delta doc updates, CDTYUPD cleanup, PWM frequency fix doc
-
-### Verify
-- Build clean, no warnings
-- `actuator_test set -m 1 -v 0.5` still works on all 4 channels
-- `reboot` → oscilloscope confirms all PWM outputs go low immediately
+Verified: build clean, 4-ch PWM works, PWM outputs go low on reboot
 
 ---
 
-## Phase 1: IO Timer API Convergence & Allocation
+## Phase 1: IO Timer API Convergence & Allocation — DONE
 **Complexity: L | Dependency: Phase 0 | Dev Board**
+**Status: COMPLETE** — Committed `2a14f110d8` (2026-02-08)
 
-Foundation phase. Reframed from "allocation API" to **full API convergence with STM32 io_timer** — because every consumer (pwm_servo, dshot, input_capture, RPMCapture, PPSCapture) expects the STM32 signature contract.
+Foundation phase. Full API convergence with STM32 io_timer — all consumer-facing signatures match.
 
-### Consumer Compatibility Matrix
+### What Was Implemented
 
-These consumers call io_timer functions and must compile + work against the SAMV7 implementation:
+- **1A** `io_timer.h` converged with STM32: proper `io_timer_channel_mode_t` enum (13 modes including Dshot/OneShot/PPS/RPM), `dshot_conf_t` with XDMAC fields, extended `io_timers_t` (clock_freq, dshot), extended `timer_io_channels_t` (masks, ccr_offset), STM32-compatible `channel_handler_t` signature, `io_timers_channel_mapping_element_t` struct
+- **1B** `io_timer_hw_description.h` updated: `initIOPWMTimer()` populates clock_freq/vectorno/dshot, `initIOPWMChannel()` populates masks/ccr_offset, proper channel mapping struct
+- **1C** `io_timer_pwmc.c` allocation logic: `channel_allocations[]` / `timer_allocations[]` state tracking, `io_timer_allocate_timer/channel()` + `unallocate` functions with irqsave critical sections, IRQ handler dispatch (`io_timer_handler0/1`), `io_timer_channel_get_gpio_output()`, OneShot support in `io_timer_trigger()` / `io_timer_set_enable()`
+- **1D** Board files updated: `BOARD_NUM_IO_TIMERS=1`, `pwm_servo.c` updated for mode param, channel mapping uses new struct
 
-| Consumer | Functions Called | Current SAMV7 Status |
-|----------|----------------|---------------------|
-| `pwm_servo.c` (SAMV7) | `io_timer_channel_init(ch, PWMOut, NULL, NULL)`, `io_timer_set_ccr()`, `io_timer_set_enable()` | Works (minimal) |
-| `src/drivers/dshot/dshot.c` | `io_timer_allocate_timer()`, `io_timer_set_dshot_burst_mode()`, `io_timer_update_dma_req()`, `io_timer_unallocate_timer/channel()` | Not implemented |
-| `src/drivers/pwm_out/PWMOut.cpp` | `io_timer_channel_init()`, `io_timer_set_pwm_rate()`, `io_timer_set_ccr()`, `io_timer_get_group()` | Partially works |
-| `src/drivers/rpm/RPMCapture.cpp` | `io_timer_allocate_channel(ch, RPM)`, `io_timer_channel_get_gpio_output()`, `io_timer_unallocate_channel()` | Will fail |
-| `src/drivers/pps_capture/PPSCapture.cpp` | `io_timer_allocate_channel(ch, PPS)`, `io_timer_channel_get_as_pwm_input()`, `io_timer_unallocate_channel()` | Will fail |
-| `input_capture.c` (Phase 3) | `io_timer_channel_init(ch, Capture, handler, ctx)` with full callback signature | Will fail (wrong handler typedef) |
-| `board_on_reset()` (50+ boards) | `io_timer_channel_get_gpio_output(i)` in loop | Not implemented |
+Verified: build clean, 4-ch PWM works, allocation conflict returns -EBUSY, gpio_output returns valid config
 
-### 1A: Converge `io_timer.h` with STM32 API
+<details>
+<summary>Consumer Compatibility Matrix (reference)</summary>
 
-**File:** `platforms/nuttx/src/px4/microchip/samv7/include/px4_arch/io_timer.h`
+| Consumer | Functions Called | Status |
+|----------|----------------|--------|
+| `pwm_servo.c` (SAMV7) | `io_timer_channel_init(ch, PWMOut, NULL, NULL)`, `io_timer_set_ccr()`, `io_timer_set_enable()` | ✅ Works |
+| `src/drivers/dshot/dshot.c` | `io_timer_allocate_timer()`, `io_timer_set_dshot_burst_mode()`, `io_timer_update_dma_req()`, `io_timer_unallocate_timer/channel()` | ✅ API ready (DShot driver is Phase 2) |
+| `src/drivers/pwm_out/PWMOut.cpp` | `io_timer_channel_init()`, `io_timer_set_pwm_rate()`, `io_timer_set_ccr()`, `io_timer_get_group()` | ✅ Works |
+| `src/drivers/rpm/RPMCapture.cpp` | `io_timer_allocate_channel(ch, RPM)`, `io_timer_channel_get_gpio_output()`, `io_timer_unallocate_channel()` | ✅ API ready |
+| `src/drivers/pps_capture/PPSCapture.cpp` | `io_timer_allocate_channel(ch, PPS)`, `io_timer_channel_get_as_pwm_input()`, `io_timer_unallocate_channel()` | ✅ API ready |
+| `input_capture.c` (Phase 3) | `io_timer_channel_init(ch, Capture, handler, ctx)` with full callback signature | ✅ API ready |
+| `board_on_reset()` (50+ boards) | `io_timer_channel_get_gpio_output(i)` in loop | ✅ Implemented |
 
-**Current state:** `io_timer_channel_mode_t` is `typedef uint8_t` with `#define` constants, `channel_handler_t` takes only `void *context`, `io_timers_t` has no `clock_freq`/`dshot`, structs missing `masks`/`ccr_offset`.
-
-**Target state:** Match STM32 `io_timer.h` signatures exactly.
-
-**Changes:**
-
-1. **Fix `MAX_IO_TIMERS` derivation** (closes finding #8 bounds issue):
-```c
-#ifdef BOARD_NUM_IO_TIMERS
-#define MAX_IO_TIMERS  BOARD_NUM_IO_TIMERS
-#else
-#define MAX_IO_TIMERS  2
-#endif
-```
-
-2. **Replace `uint8_t` typedef + `#define` with proper enum** (matches STM32 line 72):
-```c
-typedef enum io_timer_channel_mode_t {
-    IOTimerChanMode_NotUsed = 0,
-    IOTimerChanMode_PWMOut  = 1,
-    IOTimerChanMode_PWMIn   = 2,
-    IOTimerChanMode_Capture = 3,
-    IOTimerChanMode_OneShot = 4,
-    IOTimerChanMode_Trigger = 5,
-    IOTimerChanMode_Dshot   = 6,
-    IOTimerChanMode_LED     = 7,
-    IOTimerChanMode_PPS     = 8,
-    IOTimerChanMode_RPM     = 9,
-    IOTimerChanMode_Other   = 10,
-    IOTimerChanMode_DshotInverted = 11,
-    IOTimerChanMode_CaptureDMA = 12,
-    IOTimerChanModeSize
-} io_timer_channel_mode_t;
-```
-
-3. **Add `dshot_conf_t`** (before `io_timers_t`):
-```c
-typedef struct dshot_conf_t {
-    uint8_t  xdmac_ch_tx;     // XDMAC channel for PWM TX (13=PWM0, 39=PWM1)
-    uint8_t  xdmac_ch_rx[4];  // Reserved for bidir capture
-    uint32_t tc_capture_base;  // Reserved for bidir TC capture
-} dshot_conf_t;
-```
-
-4. **Extend `io_timers_t`** to match STM32 (add `clock_freq`, `dshot`):
-```c
-typedef struct io_timers_t {
-    uint32_t     base;
-    uint32_t     clock_register;
-    uint32_t     clock_bit;
-    uint32_t     clock_freq;     // NEW: MCK frequency (150MHz)
-    uint32_t     vectorno;
-    dshot_conf_t dshot;          // NEW: DShot DMA config
-} io_timers_t;
-```
-
-5. **Extend `timer_io_channels_t`** (add `masks`, `ccr_offset`):
-```c
-typedef struct timer_io_channels_t {
-    uint32_t  gpio_out;
-    uint32_t  gpio_in;
-    uint8_t   timer_index;
-    uint8_t   timer_channel;
-    uint16_t  masks;        // NEW: Channel bit in SR/ISR (1 << channel)
-    uint8_t   ccr_offset;   // NEW: Offset to CDTY from channel base
-} timer_io_channels_t;
-```
-
-6. **Fix `channel_handler_t` signature** to match STM32 (line 130):
-```c
-typedef void (*channel_handler_t)(void *context, const io_timers_t *timer,
-    uint32_t chan_index, const timer_io_channels_t *chan,
-    hrt_abstime isrs_time, uint16_t isrs_rcnt);
-```
-
-7. **Add `io_timers_channel_mapping_element_t`** struct (matches STM32 line 108):
-```c
-typedef struct io_timers_channel_mapping_element_t {
-    uint32_t first_channel_index;
-    uint32_t channel_count;
-    uint32_t lowest_timer_channel;
-    uint32_t channel_count_including_gaps;
-} io_timers_channel_mapping_element_t;
-
-typedef struct io_timers_channel_mapping_t {
-    io_timers_channel_mapping_element_t element[MAX_IO_TIMERS];
-} io_timers_channel_mapping_t;
-```
-
-8. **Update function declarations** to match STM32 signatures:
-```c
-int io_timer_init_timer(unsigned timer, io_timer_channel_mode_t mode);  // ADD mode param
-int io_timer_allocate_timer(unsigned timer, io_timer_channel_mode_t mode);
-int io_timer_unallocate_timer(unsigned timer);
-int io_timer_allocate_channel(unsigned channel, io_timer_channel_mode_t mode);
-int io_timer_unallocate_channel(unsigned channel);
-uint32_t io_timer_channel_get_gpio_output(unsigned channel);
-uint32_t io_timer_channel_get_as_pwm_input(unsigned channel);
-void io_timer_update_dma_req(uint8_t timer, bool enable);
-int io_timer_set_dshot_mode(uint8_t timer, unsigned dshot_pwm_freq);
-```
-
-9. **Add externs** for channel mapping:
-```c
-__EXPORT extern const io_timers_channel_mapping_t io_timers_channel_mapping;
-```
-
-### 1B: Update `io_timer_hw_description.h`
-
-**File:** `platforms/nuttx/src/px4/microchip/samv7/include/px4_arch/io_timer_hw_description.h`
-
-1. **`initIOPWMTimer()`**: Populate `clock_freq = BOARD_MCK_FREQUENCY` (150MHz), `vectorno` (SAM_IRQ_PWM0=31 / SAM_IRQ_PWM1=60), `dshot.xdmac_ch_tx` (13 for PWM0, 39 for PWM1)
-2. **`initIOPWMChannel()`**: Populate `masks = (1 << channel)`, `ccr_offset = 0x04` (CDTY offset within channel register block)
-3. **Replace `io_timers_channel_mapping_t`** — remove the local struct definition (line 140-142, currently `uint32_t element[]` bitmask) and use the proper `io_timers_channel_mapping_element_t` from `io_timer.h`
-4. **Rewrite `initIOTimerChannelMapping()`** to populate `first_channel_index`, `channel_count`, `lowest_timer_channel`, `channel_count_including_gaps` per timer
-
-### 1C: Implement Allocation Logic in `io_timer_pwmc.c`
-
-**File:** `platforms/nuttx/src/px4/microchip/samv7/io_pins/io_timer_pwmc.c`
-
-**Add state tracking** (pattern from STM32 `io_timer.c`):
-```c
-static io_timer_channel_allocation_t channel_allocations[IOTimerChanModeSize];
-static io_timer_channel_mode_t timer_allocations[MAX_IO_TIMERS];
-static struct { channel_handler_t callback; void *context; } channel_handlers[MAX_TIMER_IO_CHANNELS];
-```
-
-Initialize `channel_allocations[IOTimerChanMode_NotUsed] = UINT16_MAX` (all channels start as not-used).
-
-**Implement:**
-- `io_timer_allocate_timer()` / `io_timer_unallocate_timer()` — timer-level mode exclusivity with critical sections
-- `io_timer_allocate_channel()` / `io_timer_unallocate_channel()` — channel-level bitmask tracking with `irqsave`/`irqrestore`
-- Refactor `io_timer_init_timer()` to accept mode param, call `io_timer_allocate_timer()`, install PWMC IRQ handler
-- Refactor `io_timer_channel_init()` to call `io_timer_allocate_channel()`, store callback+context, support `IOTimerChanMode_Dshot` and `IOTimerChanMode_OneShot`
-- Refactor `io_timer_get_channel_mode()` and `io_timer_get_mode_channels()` to use `channel_allocations[]` array
-- `io_timer_channel_get_gpio_output()` — derive GPIO output-low config from `timer_io_channels[channel].gpio_out`
-- `io_timer_channel_get_as_pwm_input()` — return `timer_io_channels[channel].gpio_in`
-
-**Add IRQ handlers:**
-```c
-static int io_timer_handler(uint16_t timer_index);  // Read ISR1, dispatch to channel_handlers[]
-static int io_timer_handler0(int irq, void *context, void *arg);  // PWM0 → io_timer_handler(0)
-static int io_timer_handler1(int irq, void *context, void *arg);  // PWM1 → io_timer_handler(1)
-```
-
-**Add OneShot support:**
-- `io_timer_trigger()`: For OneShot channels, write CDTYUPD then use channel counter event ISR to disable after one period
-- `io_timer_set_enable()`: Support `IOTimerChanMode_OneShot` alongside `IOTimerChanMode_PWMOut`
-
-**Migration risk mitigation:**
-- `pwm_servo.c` currently calls `io_timer_init_timer(timer)` with no mode — update to `io_timer_init_timer(timer, IOTimerChanMode_PWMOut)`
-- `io_timer_channel_init()` currently ignores `channel_handler`/`context` — now stores them for capture/RPM use
-- `io_timer_set_rate()` renamed to `io_timer_set_pwm_rate()` to match STM32 (add compatibility alias if needed)
-
-### 1D: Update Board Files
-
-**File:** `boards/microchip/samv71-xult-clickboards/src/board_config.h`
-- Add `#define BOARD_NUM_IO_TIMERS 1` (single PWM0 module on dev board)
-- Verify `DIRECT_PWM_OUTPUT_CHANNELS` = 4
-
-**File:** `boards/microchip/samv71-xult-clickboards/src/timer_config.cpp`
-- Update `io_timers_channel_mapping` to use new `io_timers_channel_mapping_element_t` struct
-
-**File:** `platforms/nuttx/src/px4/microchip/samv7/io_pins/pwm_servo.c`
-- Update `io_timer_init_timer(timer)` calls to `io_timer_init_timer(timer, IOTimerChanMode_PWMOut)`
-
-### Verify
-- Build clean, no warnings
-- `actuator_test set -m 1 -v 0.5` — existing 4-ch PWM still works (regression test)
-- Allocation conflict: `io_timer_allocate_channel(0, IOTimerChanMode_PWMOut)` twice → returns `-EBUSY`
-- `io_timer_get_mode_channels(IOTimerChanMode_PWMOut)` returns correct bitmask (0xF for 4 channels)
-- `io_timer_channel_get_gpio_output(0)` returns valid GPIO config
-- `reboot` → all PWM outputs go low (Phase 0A `board_on_reset` already working)
+</details>
 
 ---
 
@@ -448,84 +210,60 @@ int up_input_capture_set_trigger(unsigned channel, input_capture_edge edge);
 
 ---
 
-## Phase 4C: QSPI Flash Parameter Storage
+## Phase 4C: QSPI Flash Storage — DONE
 **Complexity: M | Dependency: None (independent of io_timer) | Dev Board**
+**Status: COMPLETE** — 2026-02-10 (LittleFS mounted, persistence verified)
+**Full details:** See [QSPI_FILESYSTEM.md](QSPI_FILESYSTEM.md)
 
-The SAMV71-XULT has an onboard **SST26VF064B 8MB QSPI flash** that should be used for parameter,
-calibration, mission, and dataman storage. Currently all parameters are on SD card only, and
-dataman/caldata MTD paths fail at boot (`ERROR [dataman] open '/fs/mtd_caldata' failed`).
+### What Was Implemented
 
-This phase has **no dependency** on Phases 1-4 and can run in parallel.
+The SAMV71-XULT has an onboard **S25FL116K** (Spansion, JEDEC 01 40 15, **2 MB**) — not
+SST26VF064B as documented in the Atmel user guide. The flash is fully operational with LittleFS.
 
-See [QSPI_FLASH_IMPLEMENTATION_PLAN.md](QSPI_FLASH_IMPLEMENTATION_PLAN.md) for full implementation
-details, code sketches, and troubleshooting guide.
-
-### Hardware
-
-| Parameter | Value |
-|-----------|-------|
-| Part | SST26VF064B |
-| Capacity | 8 MB (64 Mbit) |
-| Interface | QSPI (Quad SPI) |
-| Max Clock | 104 MHz |
-| Erase Cycles | 100,000 per sector |
-| Sector Size | 4 KB |
-
-**QSPI pins (fixed on SAMV71-XULT, all Peripheral A):**
-PA11 (CS), PA13 (IO0), PA12 (IO1), PA17 (IO2), PD31 (IO3), PA14 (SCK)
-
-**Pin conflict with Phase 5 (8-ch PWM):** PA12 and PA14 are used by QSPI on the dev board. On the
-custom PCB, PWM1_H0 and PWM1_H1 must use the alternate pin options (PA30/PA31 Periph A) instead of
-PA12/PA14 Periph C to avoid conflict with QSPI. This is a custom PCB routing constraint, not a dev
-board issue.
-
-### MTD Partition Layout
-
+**Architecture:**
 ```
-/dev/mtdqspi (8MB)
-+-- Partition 0: /fs/mtd_params     (128 KB, 32 blocks)  - System parameters
-+-- Partition 1: /fs/mtd_caldata    ( 64 KB, 16 blocks)  - Factory calibration
-+-- Partition 2: /fs/mtd_waypoints  (  2 MB, 512 blocks) - Mission/geofence/rally
-+-- Partition 3: /fs/mtd_dataman    (  4 MB, 1024 blocks) - Dataman general storage
-+-- Reserved                        (~1.8 MB)             - Future use
+sam_qspi_spi_initialize(0)   → struct spi_dev_s*     (QSPI SPI compat mode)
+w25_initialize(spi)           → struct mtd_dev_s*     (W25/S25FL1xx MTD driver)
+register_mtddriver("/dev/mtdqspi")                     (NuttX VFS)
+mount("/dev/mtdqspi", "/mnt/qspi", "littlefs", 0, "autoformat")
 ```
 
+**defconfig:**
+`CONFIG_SAMV7_QSPI=y`, `CONFIG_SAMV7_QSPI_SPI_MODE=y`, `CONFIG_MTD_W25=y`,
+`CONFIG_W25_SPIFREQUENCY=1000000`, `CONFIG_FS_LITTLEFS=y`
+
+**Files created/modified:**
+- `src/qspi.c` — Board-level QSPI init with JEDEC probe, W25 MTD, `/dev/mtdqspi` registration
+- `src/init.c` — Calls `board_qspi_flash_init()`, mounts LittleFS at `/mnt/qspi` with autoformat
+- `src/board_config.h` — `BOARD_HAS_QSPI_FLASH`
+- `src/CMakeLists.txt` — Added `qspi.c`
+
+**NuttX driver fixes (4 bugs in `sam_qspi_spi.c`):**
+1. Swapped `qspi_putreg()` arguments at WPCR (caused AHB bus hang)
+2. CSMODE left at NRELOAD (CS pulsed between every byte)
+3. Missing LASTXFER logic in exchange/select (CS never released between transactions)
+4. CS deassertion: dummy byte corrupts WREN, CSS polarity inverted; fix = QSPI disable/re-enable
+
+**Verified:** File I/O (create, read, write, mkdir, nested files), large file (32 KB dd),
+persistence across reboot, LittleFS autoformat on first boot.
+
+**Pin conflict with Phase 5:** PA12/PA14 shared with PWM1 — custom PCB uses PA30/PA31 instead.
+
+### Future (Phase 4C-2: MTD Partitions — deferred)
+
+Partition the 2 MB flash into dedicated MTD regions for PX4 parameter/dataman storage:
+
+```
+/dev/mtdqspi (2 MB)
++-- Partition 0: /fs/mtd_params     (128 KB)  - System parameters
++-- Partition 1: /fs/mtd_caldata    ( 64 KB)  - Factory calibration
++-- Partition 2: /fs/mtd_waypoints  (512 KB)  - Mission/geofence/rally
++-- Partition 3: /fs/mtd_dataman    (  1 MB)  - Dataman general storage
++-- Reserved                        (~320 KB)  - Future use
+```
+
+Requires `board_get_manifest()` and `FLASH_BASED_PARAMS` / `FLASH_BASED_DATAMAN` in board_config.h.
 Flight logs stay on SD card (continuous high-throughput writes, GB capacity needed).
-
-### Implementation Steps
-
-**4C-1: Enable QSPI in NuttX defconfig**
-- `CONFIG_SAMV7_QSPI=y`, `CONFIG_SAMV7_QSPI_DMA=y`
-- `CONFIG_MTD_SST26=y`, `CONFIG_SST26_SPIFREQUENCY=50000000`
-
-**4C-2: Add QSPI pin definitions**
-- File: `boards/microchip/samv71-xult-clickboards/nuttx-config/include/board.h`
-- Define `GPIO_QSPI0_CS`, `GPIO_QSPI0_IO0-3`, `GPIO_QSPI0_SCK`
-
-**4C-3: Create `qspi.c` — QSPI peripheral + SST26 flash init**
-- File: `boards/microchip/samv71-xult-clickboards/src/qspi.c` (new)
-- `samv71_qspi_initialize()`: init QSPI peripheral, probe SST26, register `/dev/mtdqspi`
-- Called from `board_app_initialize()` in init.c (non-fatal on failure — SD card fallback)
-
-**4C-4: Create `mtd.cpp` — MTD partition manifest**
-- File: `boards/microchip/samv71-xult-clickboards/src/mtd.cpp` (new)
-- Define `board_get_manifest()` with 4-partition layout
-- When `CONFIG_SAMV7_QSPI` is disabled, returns empty manifest (SD card fallback)
-
-**4C-5: Update board config**
-- File: `boards/microchip/samv71-xult-clickboards/src/board_config.h`
-- Add `FLASH_BASED_PARAMS`, `FLASH_BASED_DATAMAN`, storage path defines
-- File: `boards/microchip/samv71-xult-clickboards/src/CMakeLists.txt`
-- Add `qspi.c`, `mtd.cpp` to build
-
-### Verify
-- Boot log shows `SST26VF064B: 8192 KB (2048 sectors of 4096 bytes)`
-- `ls /dev/mtd*` shows all 4 partitions
-- `param set TEST_QSPI 12345 && param save && reboot` → parameter persists
-- `dataman status` — no more caldata/dataman errors
-- Mission upload via QGC survives reboot
-- SD card removal does not lose parameters
-- Rollback: set `CONFIG_SAMV7_QSPI` to `n`, rebuild → falls back to SD card
 
 ---
 
@@ -622,14 +360,14 @@ PWM1 pin options (custom PCB selects):
 ## Dependency Graph
 
 ```
-Phase 0 (Safety + Cleanup)  ← PRODUCTION BLOCKER
+Phase 0 (Safety + Cleanup)  ✅ DONE (2026-02-08)
     │              │
     v              v
-Phase 1            P4C              (independent, parallel tracks)
+Phase 1            P4C              ✅ DONE (2026-02-08, 2026-02-10)
 (API Convergence)  QSPI Flash
    ╱    │    ╲
   v     v     v
-P2     P3    P4
+P2     P3    P4                    ← NEXT: these are now unblocked
 DShot  Capture  Harden
                                    ─── Dev Board boundary ───
 Phase 5 (8-ch PWM)      ← Custom PCB (note: PA12/PA14 conflict with QSPI)
@@ -639,26 +377,36 @@ Phase 6 (ADC/Power)     ← Custom PCB
 Phase 7 (Versioning)    ← Custom PCB
 ```
 
-Note: Phase 4C (QSPI) has **no dependency** on Phase 1. It can start immediately after Phase 0
-or even in parallel with Phase 0, since it touches entirely different files.
+Phases 0, 1, and 4C are complete. Phases 2 (DShot), 3 (Input Capture), and 4A/4B (Hardening) are
+now unblocked and can proceed in parallel.
 
 ## Effort Summary
 
-| Phase | Scope | Effort | Calendar |
-|-------|-------|--------|----------|
-| 0 | Safety closure + cleanup + deprecation | S | 1 day |
-| 1 | API convergence + allocation + migration | L-XL | 3-4 weeks |
-| 2 | DShot Output (PWMC+XDMAC) | XL | 3-4 weeks |
-| 3 | Input Capture (TC-based) + RC integration | M | 1-2 weeks |
-| 4 | Production Hardening (fault + watchdog) | M | 1 week |
-| 4C | QSPI Flash parameter/dataman storage | M | 1-2 days |
-| 5 | 8-Channel PWM (PCB) | M | 1 week |
-| 6 | ADC/Power (PCB) | M | 1 week |
-| 7 | HW Versioning (PCB) | M | 1-2 weeks |
-| **Total dev board (P0-P4C)** | | | **~9-12 weeks** |
-| **Total with PCB (P0-P7)** | | | **~12-16 weeks + fab** |
+| Phase | Scope | Effort | Status |
+|-------|-------|--------|--------|
+| 0 | Safety closure + cleanup + deprecation | S | ✅ Done (2026-02-08) |
+| 1 | API convergence + allocation + migration | L-XL | ✅ Done (2026-02-08) |
+| 2 | DShot Output (PWMC+XDMAC) | XL | Pending (unblocked) |
+| 3 | Input Capture (TC-based) + RC integration | M | Pending (unblocked) |
+| 4 | Production Hardening (fault + watchdog) | M | Pending (unblocked) |
+| 4C | QSPI Flash + LittleFS filesystem | M | ✅ Done (2026-02-10) |
+| 5 | 8-Channel PWM (PCB) | M | Pending (custom PCB) |
+| 6 | ADC/Power (PCB) | M | Pending (custom PCB) |
+| 7 | HW Versioning (PCB) | M | Pending (custom PCB) |
 
-Note: Phase 1 effort increased from L (2-3 weeks) to L-XL (3-4 weeks) due to API convergence scope and consumer migration testing. Phase 3 increased from M (1 week) to M (1-2 weeks) due to serial/PPM RC coexistence integration. Phase 4C (QSPI) is fast (~1-2 days) because the SST26 flash is already on-board and NuttX has existing QSPI/SST26 drivers.
+### Remaining Dev Board Work (Phases 2-4)
+
+| Phase | Estimated Calendar |
+|-------|-------------------|
+| 2 — DShot Output | 3-4 weeks |
+| 3 — Input Capture | 1-2 weeks |
+| 4A/4B — Hardening | 1 week |
+| **Remaining dev board** | **~5-7 weeks** |
+| **+ Custom PCB (P5-P7)** | **+ 3-4 weeks + fab** |
+
+Note: QSPI implementation took ~2 days but required fixing 4 upstream NuttX bugs in
+`sam_qspi_spi.c` (the SPI-compatibility mode driver had never been tested on real hardware).
+The actual flash is S25FL116K (2 MB), not SST26VF064B (8 MB) as originally documented.
 
 ## Key Reference Files
 
@@ -679,9 +427,10 @@ Note: Phase 1 effort increased from L (2-3 weeks) to L-XL (3-4 weeks) due to API
 | NuttX XDMAC API | `platforms/nuttx/NuttX/nuttx/arch/arm/src/samv7/sam_xdmac.h` |
 | NuttX PWMC regs | `platforms/nuttx/NuttX/nuttx/arch/arm/src/samv7/hardware/sam_pwm.h` |
 | NuttX TC regs | `platforms/nuttx/NuttX/nuttx/arch/arm/src/samv7/hardware/sam_tc.h` |
-| NuttX QSPI driver | `platforms/nuttx/NuttX/nuttx/arch/arm/src/samv7/sam_qspi.c` |
-| NuttX SST26 MTD driver | `platforms/nuttx/NuttX/nuttx/drivers/mtd/sst26.c` |
-| QSPI implementation detail | `boards/microchip/samv71-xult-clickboards/QSPI_FLASH_IMPLEMENTATION_PLAN.md` |
+| NuttX QSPI SPI mode | `platforms/nuttx/NuttX/nuttx/arch/arm/src/samv7/sam_qspi_spi.c` (4 bugs fixed) |
+| NuttX W25 MTD driver | `platforms/nuttx/NuttX/nuttx/drivers/mtd/w25.c` |
+| Board QSPI init | `boards/microchip/samv71-xult-clickboards/src/qspi.c` |
+| QSPI filesystem doc | `boards/microchip/samv71-xult-clickboards/QSPI_FILESYSTEM.md` |
 | Legacy (deprecated) | `platforms/nuttx/src/px4/microchip/samv7/io_pins/io_timer_tc.c` |
 | Legacy (deprecated) | `platforms/nuttx/src/px4/microchip/samv7/io_pins/io_timer_stub.c` |
 | Stale (superseded) | `boards/microchip/samv71-xult-clickboards/PRODUCTION_READINESS.md` |

@@ -207,6 +207,12 @@
 #define HRT_TIMER               0  /* use TC0 channel 0 for the HRT */
 #define HRT_TIMER_CHANNEL       0  /* use capture/compare channel 0 */
 
+/* QSPI Flash — S25FL116K 2MB on SAMV71-XULT ***********************************************/
+
+#ifdef CONFIG_SAMV7_QSPI_SPI_MODE
+#define BOARD_HAS_QSPI_FLASH   1
+#endif
+
 /* HSMCI SD Card ***************************************************************************/
 
 #ifdef CONFIG_SAMV7_HSMCI0

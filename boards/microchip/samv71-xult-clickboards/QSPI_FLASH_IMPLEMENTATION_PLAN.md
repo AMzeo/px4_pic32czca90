@@ -1,3 +1,5 @@
+> **SUPERSEDED** by the implementation in `src/qspi.c` and Phase 4C of [PRODUCTION_PLAN.md](PRODUCTION_PLAN.md) as of 2026-02-09. This document contains stale information (e.g., references `sam_qspi_initialize()` / `sst26_initialize_qspi()` instead of the correct SPI-mode APIs `sam_qspi_spi_initialize()` / `sst26_initialize_spi()`). Refer to the production plan and live code for current status.
+
 # QSPI Flash Implementation Plan for SAMV71-XULT
 
 ## Executive Summary

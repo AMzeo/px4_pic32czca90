@@ -36,6 +36,7 @@ add_library(drivers_board
 	init.c
 	sam_mpuinit.c
 	led.c
+	qspi.c
 	sam_gpiosetevent.c
 	sam_hsmci.c
 	spi.cpp

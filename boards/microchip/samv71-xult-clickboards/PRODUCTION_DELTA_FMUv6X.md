@@ -26,6 +26,8 @@
 | **I2C Bus (TWIHS0)** | ✅ | Single bus, all sensors |
 | **SPI Bus (SPI0)** | ✅ | Single bus, IMU + Baro |
 | **Status LED** | ✅ | PA23 (Blue) |
+| **QSPI Flash (S25FL116K)** | ✅ | 2MB, LittleFS at /mnt/qspi, persistence verified |
+| **IO Timer Allocation API** | ✅ | Converged with STM32 signatures |
 | **PA7/XIN32 Conflict** | ✅ | FIXED - Motor 1 on PC13 |
 
 ### ❌ Not Implemented (Pending)
@@ -33,9 +35,9 @@
 | Feature | Priority | Hours | Blocker? |
 |---------|----------|-------|----------|
 | **DShot Output** | Must-Have | 60-80 | Yes |
-| **PWM 50 Hz (Servos)** | ✅ Done | 0 | No |
+| **PWM 50 Hz (Servos)** | ✅ Done | 0 | No (dynamic prescaler) |
 | **PWM Capture (RC PPM)** | Must-Have | 16-24 | Yes |
-| **IO Timer Allocation API** | Must-Have | 20-30 | Yes |
+| **IO Timer Allocation API** | ✅ Done | 0 | No |
 | **OneShot125/42** | Must-Have | Incl. in DShot | Yes |
 | **PWM Channels 5-8** | Should-Have | 16-24 | No |
 | **EEPROM/FRAM Params** | Should-Have | 16-24 | No |
@@ -61,7 +63,7 @@
 | **RC Input** | ⚠️ Partial | Serial only, no PPM/PWM capture |
 | **SD Card Detect** | ⚠️ Conflict | PD18 conflicts with TC5 (RC capture) |
 | **CAN Bus** | ⚠️ Untested | Hardware present, driver not validated |
-| **QSPI Flash** | ⚠️ Planned | 8MB on board, not implemented |
+| **QSPI Flash** | ✅ Working | S25FL116K 2MB, LittleFS at /mnt/qspi |
 | **Safety Button** | ⚠️ Conflict | PA9 conflicts with UART0_RXD |
 | **Motor 4 (PB0)** | ⚠️ Conflict | Conflicts with UART0_TXD |
 | **USB Bootloader** | ⚠️ SAM-BA only | ROM bootloader works, PX4-style not implemented |
@@ -80,7 +82,7 @@ This document provides a comprehensive comparison between the SAMV71-XULT-Clickb
 | DShot Support | Yes (DMA burst) | No | Missing |
 | Power Management | Full (rails, bricks, USB) | None | Missing |
 | Sensor Redundancy | 3x IMU, 2x Baro | 1x each | None |
-| Storage Redundancy | EEPROM + SD | SD only | Partial |
+| Storage Redundancy | EEPROM + SD | SD + QSPI flash (2MB LittleFS) | Improved |
 | Communications | CAN FD + Ethernet + USB OTG | CAN (untested) + USB device | Limited |
 
 ---
@@ -129,11 +131,12 @@ This document provides a comprehensive comparison between the SAMV71-XULT-Clickb
 | Feature | FMUv6X | SAMV71-XULT | Impact |
 |---------|--------|-------------|--------|
 | Primary param storage | I2C EEPROM/FRAM | SD card | Higher failure risk |
-| Backup storage | SD card | None | No fallback |
-| MTD EEPROM devices | 2 (base + IMU cal) | 0 | No wear-leveled storage |
-| QSPI flash | No | Planned (8MB) | Not implemented |
+| Backup storage | SD card | QSPI flash (LittleFS) | ✅ Available |
+| MTD EEPROM devices | 2 (base + IMU cal) | 0 (MTD partitions deferred) | Deferred |
+| QSPI flash | No | ✅ S25FL116K 2MB (LittleFS) | Working |
 
-**Impact:** If SD card fails or is removed, parameters are lost. No non-volatile backup.
+**Impact:** Parameters currently on SD card. QSPI flash (2 MB LittleFS at /mnt/qspi) is available
+for backup storage. MTD partitions for direct parameter/dataman storage are planned (Phase 4C-2).
 
 ### 1.5 Sensor Redundancy & Thermal Management
 
@@ -192,7 +195,7 @@ This document provides a comprehensive comparison between the SAMV71-XULT-Clickb
 | OneShot modes | Yes | No | Racing quad incompatible |
 | DShot DMA burst | Yes | No | No DShot support |
 
-**Impact:** Cannot drive standard 50 Hz servos without prescaler modification.
+**Impact:** 50 Hz servo PWM works via dynamic prescaler (MCK/64 for <287 Hz, MCK/8 for >=287 Hz).
 
 ### 1.10 Mechanical & Production Readiness
 
@@ -406,17 +409,18 @@ This document provides a comprehensive comparison between the SAMV71-XULT-Clickb
 
 | Category | Items | Hours |
 |----------|-------|-------|
-| **Must-Have** | 1-6 | 108-154 |
+| **Must-Have (remaining)** | 1, 4-5 | 80-112 |
 | **Should-Have** | 7-12 | 104-176 |
 | **Nice-to-Have** | 13-15 | 16-28 |
-| **Total** | | **228-358** |
+| **Total remaining** | | **200-316** |
+| ~~Completed~~ | ~~2, 3, 6, QSPI~~ | ~~Done~~ |
 
 ### Must-Have Breakdown
 
 | Item | Hours |
 |------|-------|
-| 1. DShot output (DMA burst) | 60-80 |
-| 2. IO timer allocation + capture | 20-30 |
+| 1. DShot output (PWMC Sync + XDMAC) | 60-80 |
+| 2. IO timer allocation + capture | ✅ Done |
 | 3. PWM rate flexibility (50 Hz) | ✅ Done |
 | 4. RC input path | 16-24 |
 | 5. SD card detect policy | 4-8 |
@@ -437,40 +441,29 @@ This document provides a comprehensive comparison between the SAMV71-XULT-Clickb
 
 ## 4. PWM/Timer Technical Details
 
-### 4.1 Struct-Level Incompatibilities
+### 4.1 Struct-Level Compatibility — RESOLVED (Phase 1)
 
-**STM32 `io_timers_t` (target):**
+SAMV7 structs now match STM32 signatures:
+
 ```c
+// ✅ SAMV7 io_timers_t (converged with STM32)
 typedef struct io_timers_t {
-    uint32_t    base;
-    uint32_t    clock_register;
-    uint32_t    clock_bit;
-    uint32_t    clock_freq;      // ❌ SAMV7 MISSING
-    uint32_t    vectorno;
-    dshot_conf_t dshot;          // ❌ SAMV7 MISSING
+    uint32_t     base;
+    uint32_t     clock_register;
+    uint32_t     clock_bit;
+    uint32_t     clock_freq;     // ✅ Added (150 MHz MCK)
+    uint32_t     vectorno;
+    dshot_conf_t dshot;          // ✅ Added (XDMAC ch, bidir fields)
 } io_timers_t;
-```
 
-**SAMV7 `io_timers_t` (current):**
-```c
-typedef struct io_timers_t {
-    uint32_t  base;
-    uint32_t  clock_register;
-    uint32_t  clock_bit;
-    uint32_t  vectorno;
-    // Missing: clock_freq, dshot_conf_t
-} io_timers_t;
-```
-
-**STM32 `timer_io_channels_t` (target):**
-```c
+// ✅ SAMV7 timer_io_channels_t (converged with STM32)
 typedef struct timer_io_channels_t {
-    uint32_t    gpio_out;
-    uint32_t    gpio_in;
-    uint8_t     timer_index;
-    uint8_t     timer_channel;
-    uint16_t    masks;           // ❌ SAMV7 MISSING
-    uint8_t     ccr_offset;      // ❌ SAMV7 MISSING
+    uint32_t  gpio_out;
+    uint32_t  gpio_in;
+    uint8_t   timer_index;
+    uint8_t   timer_channel;
+    uint16_t  masks;             // ✅ Added (1 << channel)
+    uint8_t   ccr_offset;        // ✅ Added (CDTY offset)
 } timer_io_channels_t;
 ```
 
@@ -478,27 +471,26 @@ typedef struct timer_io_channels_t {
 
 | Function | STM32 | SAMV7 | Needed For |
 |----------|-------|-------|------------|
-| `io_timer_allocate_timer()` | ✅ | ❌ | Safe mode switching |
-| `io_timer_allocate_channel()` | ✅ | ❌ | Conflict detection |
-| `io_timer_handler0-7()` | ✅ (8) | ❌ | Capture callbacks |
-| `io_timer_set_dshot_burst_mode()` | ✅ | ❌ | DShot output |
-| `io_timer_set_dshot_capture_mode()` | ✅ | ❌ | Bidirectional DShot |
-| `io_timer_update_dma_req()` | ✅ | ❌ | DMA transfers |
-| `io_timer_trigger()` | ✅ (active) | ⚠️ (no-op) | OneShot |
-| `io_timer_set_oneshot_mode()` | ✅ | ❌ | OneShot125/42 |
-| Capture mode | ✅ | ❌ | RC input, RPM |
+| `io_timer_allocate_timer()` | ✅ | ✅ | Safe mode switching |
+| `io_timer_allocate_channel()` | ✅ | ✅ | Conflict detection |
+| `io_timer_handler0-7()` | ✅ (8) | ✅ (0-1) | Capture callbacks |
+| `io_timer_set_dshot_burst_mode()` | ✅ | ⚠️ API ready | DShot output (Phase 2) |
+| `io_timer_set_dshot_capture_mode()` | ✅ | ❌ | Bidirectional DShot (deferred) |
+| `io_timer_update_dma_req()` | ✅ | ⚠️ API ready | DMA transfers (Phase 2) |
+| `io_timer_trigger()` | ✅ (active) | ✅ | OneShot |
+| `io_timer_set_oneshot_mode()` | ✅ | ✅ | OneShot125/42 |
+| Capture mode | ✅ | ⚠️ API ready | RC input, RPM (Phase 3) |
 
-### 4.3 PWM Rate Limitation
+### 4.3 PWM Rate — RESOLVED
 
 ```
-SAMV7 PWMC Current Configuration:
+SAMV7 PWMC Configuration (dynamic prescaler):
 ├── MCK = 150 MHz
-├── Prescaler = MCK/8 (fixed) = 18.75 MHz
+├── >= 287 Hz: Prescaler = MCK/8  = 18.75 MHz (fine resolution)
+├── <  287 Hz: Prescaler = MCK/64 = 2.34375 MHz (extended range)
 ├── CPRD register = 16-bit (max 65535)
-└── Minimum frequency = 18.75 MHz / 65535 ≈ 286 Hz
-
-Problem: Standard servo PWM requires 50 Hz
-Solution: Dynamic prescaler selection (MCK/1024 for low rates)
+├── Min frequency = 2.34375 MHz / 65535 ≈ 36 Hz
+└── Standard 50 Hz servo PWM: ✅ WORKING
 ```
 
 ### 4.4 Pin Conflicts
@@ -531,9 +523,14 @@ platforms/nuttx/src/px4/stm/stm32_common/include/px4_arch/dshot.h
 ```
 boards/microchip/samv71-xult-clickboards/src/board_config.h
 boards/microchip/samv71-xult-clickboards/src/timer_config.cpp
+boards/microchip/samv71-xult-clickboards/src/qspi.c
+boards/microchip/samv71-xult-clickboards/src/init.c
 boards/microchip/samv71-xult-clickboards/default.px4board
+boards/microchip/samv71-xult-clickboards/QSPI_FILESYSTEM.md
+boards/microchip/samv71-xult-clickboards/PRODUCTION_PLAN.md
 platforms/nuttx/src/px4/microchip/samv7/io_pins/io_timer_pwmc.c
 platforms/nuttx/src/px4/microchip/samv7/include/px4_arch/io_timer.h
+platforms/nuttx/NuttX/nuttx/arch/arm/src/samv7/sam_qspi_spi.c  (4 bugs fixed)
 ```
 
 ---
@@ -544,15 +541,15 @@ platforms/nuttx/src/px4/microchip/samv7/include/px4_arch/io_timer.h
 
 The SAMV71-XULT is **suitable** for:
 - PX4 porting feasibility assessment
-- Basic flight testing with PWM ESCs (≥286 Hz)
+- Basic flight testing with PWM ESCs (50-400 Hz, dynamic prescaler)
 - Sensor integration development
 - Ground vehicle/rover applications
+- QSPI flash storage prototyping (LittleFS filesystem)
 - Educational purposes
 
 **Not suitable** for:
 - Production aircraft
-- DShot ESCs
-- Standard 50 Hz servos (without modification)
+- DShot ESCs (Phase 2 pending)
 - Applications requiring sensor redundancy
 - Safety-critical deployments
 
@@ -574,6 +571,7 @@ The SAMV71-XULT is **suitable** for:
 
 ---
 
-*Document Version: 2.3*
-*Date: 2025*
+*Document Version: 3.0*
+*Date: 2026-02-10*
 *Format: Master feature list + Production-parity implementation checklist*
+*Updated: Phase 0/1/4C completed, IO Timer API converged, QSPI flash working*

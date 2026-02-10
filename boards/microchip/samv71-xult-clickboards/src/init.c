@@ -110,6 +110,10 @@ extern uint32_t _e_nocache;
 /* Board MPU nocache region init (sam_mpuinit.c) */
 extern void board_mpu_nocache_init(void);
 
+#ifdef CONFIG_SAMV7_QSPI_SPI_MODE
+extern int board_qspi_flash_init(void);
+#endif
+
 __END_DECLS
 
 #ifdef CONFIG_SAMV7_HSMCI0
@@ -336,6 +340,34 @@ __EXPORT int board_app_initialize(uintptr_t arg)
 	} else {
 		printf("[boot] DMA alloc init OK\n");
 	}
+
+#ifdef CONFIG_SAMV7_QSPI_SPI_MODE
+	int qspi_ret = board_qspi_flash_init();
+
+	if (qspi_ret < 0) {
+		printf("[boot] QSPI flash init failed: %d (continuing)\n", qspi_ret);
+
+	} else {
+#  ifdef CONFIG_FS_LITTLEFS
+		/* Mount LittleFS on QSPI flash.
+		 * "autoformat" mounts existing filesystem, or formats then mounts
+		 * if no valid superblock is found. Files persist across reboots.
+		 */
+		(void)mkdir("/mnt", 0777);
+		(void)mkdir("/mnt/qspi", 0777);
+
+		int mnt_ret = mount("/dev/mtdqspi", "/mnt/qspi", "littlefs", 0, "autoformat");
+
+		if (mnt_ret < 0) {
+			printf("[boot] LittleFS mount failed: errno %d (continuing)\n", errno);
+		} else {
+			printf("[boot] LittleFS mounted at /mnt/qspi\n");
+		}
+
+#  endif
+	}
+
+#endif
 
 #ifdef CONFIG_SAMV7_HSMCI0
 	printf("[boot] Starting HSMCI (SD card)...\n");
