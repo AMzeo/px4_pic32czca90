@@ -3,7 +3,7 @@
 # MAVLink enabled on USB CDC/ACM (ttyACM0)
 # Default airframe: Generic Quad (4001), can be changed to HIL (1001) via param save
 param set-default SYS_AUTOSTART 4001
-param set-default SYS_USB_AUTO 2
+param set-default SYS_USB_AUTO 0
 param set-default USB_MAV_MODE 0
 param set-default MAV_0_CONFIG 101
 param set-default MAV_0_RATE 57600
@@ -13,12 +13,16 @@ param set-default SDLOG_MODE -1
 # Disable external I2C sensor probing (we use specific Click board drivers)
 param set-default SENS_EXT_I2C_PRB 0
 
-# Disable sensor checks for companion computer / HITL mode
-# Allow arming without physical sensors (data comes via MAVLink)
+# Enable sensor processing pipelines (required for both real sensors and HITL)
+# SYS_HAS_MAG/BARO=1 enables the VehicleAirData and VehicleMagnetometer modules
+# that process sensor_baro/mag into vehicle_air_data/vehicle_magnetometer for EKF2.
+# Without these, HITL simulation data arrives but is never consumed.
+param set-default SYS_HAS_MAG 1
+param set-default SYS_HAS_BARO 1
+
+# Circuit breakers to allow arming without full sensor suite
 param set-default CBRK_SUPPLY_CHK 894281
 param set-default COM_ARM_WO_GPS 1
-param set-default SYS_HAS_MAG 0
-param set-default SYS_HAS_BARO 0
 
 # Circuit breaker for flight termination (required for HITL)
 param set-default CBRK_FLIGHTTERM 121212

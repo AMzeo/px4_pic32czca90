@@ -1,3 +1,0 @@
-#!/bin/sh
-set SERIAL_DEV none
-set BAUD_PARAM none
