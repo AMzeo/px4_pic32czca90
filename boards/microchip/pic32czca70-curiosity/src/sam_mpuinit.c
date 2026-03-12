@@ -59,7 +59,7 @@
 
 void board_mpu_nocache_init(void)
 {
-  /* Configure the 64KB region at the end of SRAM (0x20450000) as
+  /* Configure the 64KB region at the end of SRAM (0x20470000) as
    * Normal, Shareable, Non-Cacheable memory.
    *
    * CRITICAL FIX: Use a hardcoded HIGH region number (14) to ensure priority
@@ -68,7 +68,7 @@ void board_mpu_nocache_init(void)
    * by the default cacheable map, rendering this configuration useless.
    */
 
-  uint32_t region_base = 0x20450000;
+  uint32_t region_base = 0x20470000;
   uint32_t region_num  = 14; /* High priority region (Max is usually 15) */
   uint32_t l2size      = 16; /* 64KB = 2^16 */
   uint32_t regval;

@@ -1,5 +1,5 @@
 /****************************************************************************
- * boards/microchip/samv71-xult-clickboards/nuttx-config/scripts/script.ld
+ * boards/microchip/pic32czca70-curiosity/nuttx-config/scripts/script.ld
  *
  *   Copyright (c) 2024 PX4 Development Team. All rights reserved.
  *
@@ -32,16 +32,20 @@
  *
  ****************************************************************************/
 
-/* Linker script for ATSAMV71Q21B (Cortex-M7):
+/* Linker script for PIC32CZ CA70 144-pin (Cortex-M7):
  *   - 2048 KB Flash at 0x00400000
- *   - 384 KB SRAM at 0x20400000
+ *   - 512 KB SRAM  at 0x20400000
+ *
+ * Memory layout (512KB total):
+ *   sram    : 448 KB at 0x20400000 - 0x2046FFFF  (heap + stack)
+ *   nocache : 64 KB  at 0x20470000 - 0x2047FFFF  (DMA buffers, uncached)
  */
 
 MEMORY
 {
-  flash (rx)  : ORIGIN = 0x00400000, LENGTH = 2048K
-  sram (rwx)  : ORIGIN = 0x20400000, LENGTH = 320K
-  nocache (rwx) : ORIGIN = 0x20450000, LENGTH = 64K
+  flash (rx)    : ORIGIN = 0x00400000, LENGTH = 2048K
+  sram (rwx)    : ORIGIN = 0x20400000, LENGTH = 448K
+  nocache (rwx) : ORIGIN = 0x20470000, LENGTH = 64K
 }
 
 OUTPUT_ARCH(arm)
