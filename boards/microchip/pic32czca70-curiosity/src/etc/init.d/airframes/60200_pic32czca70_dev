@@ -1,0 +1,20 @@
+#!/bin/sh
+#
+# @name PIC32CZ-CA70 Curiosity development bring-up
+#
+# @type Test
+# @class Copter
+#
+# Minimal profile used for low-level PIC32CZ CA70 bring-up.
+
+. ${R}etc/init.d/rc.mc_defaults
+
+param set-default SYS_HAS_GPS 0
+param set-default SYS_HAS_MAG 0
+param set-default SYS_HAS_BARO 0
+param set-default EKF2_AID_MASK 1
+param set-default BAT_N_CELLS 3
+
+set MIXER none
+
+. ${R}etc/init.d/rc.mc_apps

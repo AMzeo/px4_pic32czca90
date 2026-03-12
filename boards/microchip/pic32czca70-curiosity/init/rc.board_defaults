@@ -1,0 +1,51 @@
+#!/bin/sh
+# board defaults
+# MAVLink enabled on USB CDC/ACM (ttyACM0)
+# Default airframe: Generic Quad (4001), can be changed to HIL (1001) via param save
+param set-default SYS_AUTOSTART 4001
+param set-default SYS_USB_AUTO 0
+param set-default USB_MAV_MODE 0
+param set-default MAV_0_CONFIG 101
+param set-default MAV_0_RATE 57600
+param set-default MAV_0_FORWARD 0
+param set-default SDLOG_MODE -1
+
+# Disable external I2C sensor probing (we use specific Click board drivers)
+param set-default SENS_EXT_I2C_PRB 0
+
+# Enable sensor processing pipelines (required for both real sensors and HITL)
+# SYS_HAS_MAG/BARO=1 enables the VehicleAirData and VehicleMagnetometer modules
+# that process sensor_baro/mag into vehicle_air_data/vehicle_magnetometer for EKF2.
+# Without these, HITL simulation data arrives but is never consumed.
+param set-default SYS_HAS_MAG 1
+param set-default SYS_HAS_BARO 1
+
+# Circuit breakers to allow arming without full sensor suite
+param set-default CBRK_SUPPLY_CHK 894281
+param set-default COM_ARM_WO_GPS 1
+
+# Circuit breaker for flight termination (required for HITL)
+param set-default CBRK_FLIGHTTERM 121212
+
+# HITL actuator output configuration (quadcopter)
+# 101-104 = Motor1-Motor4
+param set-default HIL_ACT_FUNC1 101
+param set-default HIL_ACT_FUNC2 102
+param set-default HIL_ACT_FUNC3 103
+param set-default HIL_ACT_FUNC4 104
+
+# Note: MAV_PARAM_RATE doesn't exist in this PX4 version
+# Parameter streaming rate is controlled per-instance via MAV_x_RATE
+
+# GPS Configuration
+# GPS on UART2 = /dev/ttyS2 (J505 pins 5/6: PD15/PD16)
+param set-default GPS_1_CONFIG 201
+param set-default SER_GPS1_BAUD 57600
+
+# RC Input Configuration
+# RC on UART4 = /dev/ttyS3 (J505 pin 3: PD18)
+param set-default RC_PORT_CONFIG 300
+
+# Dataman on QSPI flash (persistent mission/geofence/rally storage)
+# Started here (before rcS dataman section) so storage is available early.
+dataman start -f /fs/mtd_waypoints
