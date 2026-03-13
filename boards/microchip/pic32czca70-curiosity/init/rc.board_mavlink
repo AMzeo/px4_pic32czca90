@@ -8,4 +8,9 @@
 # because cdcacm_autostart runs AFTER rc.serial in the rcS boot sequence.
 sercon
 
+# Wait for USB CDC/ACM enumeration to complete on the host before MAVLink opens
+# the port. Without this, the USB RESET during host enumeration invalidates
+# MAVLink's file descriptor moments after it opens /dev/ttyACM0.
+sleep 2
+
 echo "INFO: Board mavlink config - USB CDC/ACM enabled"

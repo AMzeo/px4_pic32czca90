@@ -207,12 +207,12 @@
 #define HRT_TIMER               0  /* use TC0 channel 0 for the HRT */
 #define HRT_TIMER_CHANNEL       0  /* use capture/compare channel 0 */
 
-/* QSPI Flash — S25FL116K 2MB on SAMV71-XULT ***********************************************/
+/* QSPI Flash — SST26VF032B 4MB on PIC32CZ CA70 Curiosity *********************************/
 
 #ifdef CONFIG_SAMV7_QSPI_SPI_MODE
 #define BOARD_HAS_QSPI_FLASH   1
 
-/* QSPI Flash Partition Layout (in erase sectors; S25FL116K uses 4 KB sectors)
+/* QSPI Flash Partition Layout (in erase sectors; SST26VF032B uses 4 KB sectors)
  *
  * | Partition | Path             | Sectors | Size   | Purpose                      |
  * |-----------|------------------|---------|--------|------------------------------|

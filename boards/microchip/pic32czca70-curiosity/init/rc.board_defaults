@@ -3,7 +3,7 @@
 # MAVLink enabled on USB CDC/ACM (ttyACM0)
 # Default airframe: Generic Quad (4001), can be changed to HIL (1001) via param save
 param set-default SYS_AUTOSTART 4001
-param set-default SYS_USB_AUTO 0
+param set-default SYS_USB_AUTO -1
 param set-default USB_MAV_MODE 0
 param set-default MAV_0_CONFIG 101
 param set-default MAV_0_RATE 57600

@@ -34,25 +34,24 @@
 /**
  * @file qspi.c
  *
- * Board-level QSPI flash initialization for SAMV71-XULT.
+ * Board-level QSPI flash initialization for PIC32CZ CA70 Curiosity.
  *
  * Uses SAMV7 QSPI in SPI compatibility mode (CONFIG_SAMV7_QSPI_SPI_MODE)
  * which wraps the QSPI hardware as a standard SPI device for the NuttX
- * W25 MTD driver.
+ * SST26 MTD driver.
  *
  * Data flow (init):
- *   sam_qspi_spi_initialize(0) -> struct spi_dev_s*
- *   w25_initialize(spi)        -> struct mtd_dev_s*
- *   register_mtddriver("/dev/mtdqspi") -> visible in NuttX VFS
+ *   sam_qspi_spi_initialize(0)          -> struct spi_dev_s*
+ *   sst26_initialize_spi(spi, devid)    -> struct mtd_dev_s*
+ *   register_mtddriver("/dev/mtdqspi")  -> visible in NuttX VFS
  *
  * Data flow (partitions):
  *   mtd_partition(mtd, offset, nblocks) -> sub-region MTD
  *   ftl_initialize(minor, part_mtd)     -> /dev/mtdblockN
  *   bchdev_register(blk, char, false)   -> /fs/mtd_params, /fs/mtd_waypoints
  *
- * Note: SAMV71-XULT board has S25FL116K (Spansion, JEDEC 01 40 15, 2MB)
- * not SST26VF064B as documented. The W25 driver handles S25FL1xx via
- * compatible JEDEC command set (same memory type 0x40 as W25Q series).
+ * Note: PIC32CZ CA70 Curiosity board has SST26VF032B (Microchip, JEDEC BF 26 42, 4MB).
+ * The SST26 driver handles VF016/VF032/VF064 variants via the same command set.
  */
 
 #include <nuttx/config.h>
@@ -155,7 +154,7 @@ int board_qspi_flash_init(void)
 	struct mtd_geometry_s geo;
 	int ret;
 
-	printf("[boot] QSPI flash init: S25FL116K via SPI mode\n");
+	printf("[boot] QSPI flash init: SST26VF032B via SPI mode\n");
 
 	/* Step 1: Initialize QSPI peripheral in SPI compatibility mode */
 
@@ -167,7 +166,7 @@ int board_qspi_flash_init(void)
 	}
 
 	/* Step 2: JEDEC ID probe to verify SPI communication.
-	 * Expected: S25FL116K -> 01 40 15
+	 * Expected: SST26VF032B -> BF 26 42
 	 *           0xFF/0xFF/0xFF = no response (CS, clock, or wiring issue)
 	 *           0x00/0x00/0x00 = bus stuck low
 	 */
@@ -196,16 +195,15 @@ int board_qspi_flash_init(void)
 		}
 	}
 
-	/* Step 3: Initialize W25 MTD driver.
-	 * Handles S25FL116K (Spansion, JEDEC 01 40 15) via compatible
-	 * command set -- same memory type 0x40 as Winbond W25Q series.
+	/* Step 3: Initialize SST26 MTD driver.
+	 * Handles SST26VF016/032/064 (Microchip, JEDEC BF 26 41/42/43).
 	 * Returns NULL if JEDEC mismatch.
 	 */
 
-	mtd = w25_initialize(spi);
+	mtd = sst26_initialize_spi(spi, 0);
 
 	if (mtd == NULL) {
-		printf("[boot] W25/S25FL init failed (JEDEC mismatch or SPI error)\n");
+		printf("[boot] SST26 init failed (JEDEC mismatch or SPI error)\n");
 		return -ENODEV;
 	}
 
@@ -254,7 +252,7 @@ int board_qspi_flash_init(void)
  *   Non-fatal: errors are logged but boot continues with SD-only storage.
  *
  * Input Parameters:
- *   mtd - The parent MTD device (from w25_initialize)
+ *   mtd - The parent MTD device (from sst26_initialize_spi)
  *
  * Returned Value:
  *   OK on success (all partitions created), negative errno on first failure.
@@ -274,7 +272,7 @@ int board_qspi_create_partitions(struct mtd_dev_s *mtd)
 	}
 
 	/* Convert erase-sector counts to MTD block counts.
-	 * W25/S25FL: blocksize=256, erasesize=4096 -> blkpererase=16
+	 * SST26VF032B: blocksize=256, erasesize=4096 -> blkpererase=16
 	 */
 	int blkpererase = geo.erasesize / geo.blocksize;
 

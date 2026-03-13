@@ -301,6 +301,10 @@
  *    There are alternative pin selections only for UART3 TXD:
  */
 
+/* UART1 — PKOB4 virtual COM port (PA05=RXD, PA06=TXD) */
+
+#define GPIO_UART1_TXD  GPIO_UART1_TXD_3
+
 #define GPIO_UART3_TXD  GPIO_UART3_TXD_1
 
 /* - Arduino Communications.  Additional UART/USART connections are available
