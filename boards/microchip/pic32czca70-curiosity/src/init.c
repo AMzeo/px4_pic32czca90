@@ -58,6 +58,7 @@
 #include <nuttx/sdio.h>
 #include <nuttx/mm/gran.h>
 #include <nuttx/i2c/i2c_master.h>
+
 #include <chip.h>
 #include <arch/board/board.h>
 #include "arm_internal.h"

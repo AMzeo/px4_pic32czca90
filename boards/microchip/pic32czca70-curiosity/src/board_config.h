@@ -267,7 +267,8 @@
 		GPIO_SPI0_DRDY_ICM20689,  \
 		GPIO_SPI0_CS_BMP388,      \
 		GPIO_MB1_RST,             \
-		GPIO_EXT1_RST,            \
+		/* GPIO_EXT1_RST conflicts with UART1 RX (PA5 Periph C) */ \
+		/* GPIO_EXT1_RST,         */ \
 		GPIO_EXT2_RST,            \
 		GPIO_BTN_SAFETY,          \
 		GPIO_LED_SAFETY,          \

@@ -13,7 +13,7 @@
  *    the distribution and/or other materials provided with the
  *    distribution.
  * 3. Neither the name PX4 nor the names of its contributors may be
- *    used to endorse or promote products derived from this software
+ *    used to endorse or promote products hardware from this software
  *    without specific prior written permission.
  *
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
@@ -34,18 +34,15 @@
 /**
  * @file usb.c
  *
- * Board-specific USB functions for SAMV71-XULT.
+ * Board-specific USB functions for PIC32CZ CA70 Curiosity.
  */
-
-/************************************************************************************
- * Included Files
- ************************************************************************************/
 
 #include <px4_platform_common/px4_config.h>
 
 #include <sys/types.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <debug.h>
 
 #include <nuttx/usb/usbdev.h>
@@ -56,61 +53,18 @@
 #include <sam_gpio.h>
 #include "board_config.h"
 
-/************************************************************************************
- * Definitions
- ************************************************************************************/
-
-/************************************************************************************
- * Private Functions
- ************************************************************************************/
-
-/************************************************************************************
- * Public Functions
- ************************************************************************************/
-
-/************************************************************************************
- * Name: sam_usbinitialize
- *
- * Description:
- *   Called to setup USB-related GPIO pins for the SAMV71-XULT board.
- *
- ************************************************************************************/
-
 __EXPORT void sam_usbinitialize(void)
 {
-	/* SAMV71 has USB high-speed with internal transceivers */
-	/* USB pins are automatically configured by the USB driver */
+	/* USBHS has internal transceivers; no GPIO mux needed. */
 }
-
-/************************************************************************************
- * Name:  sam_usbsuspend
- *
- * Description:
- *   Board logic must provide the sam_usbsuspend logic if the USBDEV driver is
- *   used.  This function is called whenever the USB enters or leaves suspend mode.
- *   This is an opportunity for the board logic to shutdown clocks, power, etc.
- *   while the USB is suspended.
- *
- ************************************************************************************/
 
 __EXPORT void sam_usbsuspend(FAR struct usbdev_s *dev, bool resume)
 {
-	uinfo("resume: %d\n", resume);
+	(void)dev;
+	(void)resume;
 }
-
-/************************************************************************************
- * Name:  board_read_VBUS_state
- *
- * Description:
- *   Read the USB VBUS state. Returns true if VBUS is present.
- *
- ************************************************************************************/
 
 __EXPORT int board_read_VBUS_state(void)
 {
-	/* SAMV71-XULT: Always return 0 (PX4_OK) to indicate USB VBUS present
-	 * cdcacm_autostart checks: (board_read_VBUS_state() == PX4_OK)
-	 * TODO: Implement actual VBUS detection when GPIO is configured
-	 */
-	return 0;  /* 0 = PX4_OK = VBUS present */
+	return 0;  /* 0 = PX4_OK = VBUS always present */
 }
