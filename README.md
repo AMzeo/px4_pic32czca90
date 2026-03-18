@@ -1,65 +1,61 @@
-# PX4-Autopilot-Private (SAMV71 Branch)
+# PX4 Autopilot — PIC32CZ CA70 Port
 
-This branch contains PX4 Autopilot ported to Microchip SAMV71-XULT development board.
+This branch contains PX4 Autopilot ported to the **Microchip PIC32CZ CA70 Curiosity** development board.
 
-## SAMV71 Port Status
+## Port Status
 
 | Component | Status |
 |-----------|--------|
 | PX4 Boot | ✅ Working |
-| NSH Shell | ✅ Working |
-| SD Card Logging | ✅ Working |
-| ICM20689 IMU | ✅ Working |
-| SPI Bus | ✅ Working |
-| I2C Bus | ✅ Working |
-| PWM Output | ✅ Working (3 channels) |
-| USB CDC-ACM | ✅ Working |
-| MAVLink | ✅ Working |
-| VBUS Detection | 🔄 Stubbed (always present) |
-| BMP388 Barometer | 🔄 In Progress |
-| AK09915 Magnetometer | 🔄 Configured |
-| DShot | ⬜ Not Started |
-| CAN/UAVCAN | ⬜ Not Started |
-
-## Documentation
-
-| Document | Description |
-|----------|-------------|
-| [Team Setup Guide](docs/SAMV7_TEAM_SETUP_GUIDE.md) | How to clone and build |
-| [Execution Plan](docs/SAMV71_FMUV6_PARITY_EXECUTION_PLAN.md) | Acceptance criteria & test checklists |
-| [Development Roadmap](docs/SAMV71_FMUV6_PARITY_ROADMAP.md) | 5-phase FMUv6 parity roadmap |
-| [Gap Analysis](docs/SAMV71_PORT_GAP_ANALYSIS.md) | SAMV71 vs STM32 comparison |
-| [Changelog](docs/CHANGELOG_2024-12-12.md) | Recent changes |
+| NSH Shell | ✅ Working (UART1 / PKOB4 USB) |
+| QSPI Flash | ✅ Working (SST26VF032B 4MB) |
+| Parameter Storage | ✅ Working (/fs/mtd_params) |
+| Dataman | ✅ Working (/fs/mtd_waypoints) |
+| USB CDC-ACM | ✅ Working (TARGET USB) |
+| MAVLink | ✅ Working (/dev/ttyACM1) |
+| PWM Output | ✅ Working (4 channels, 400Hz) |
+| EKF2 | ✅ Working (HITL verified) |
+| HITL Simulation | ✅ Working (jMAVSim) |
+| SPI Bus | 🔄 Configured (sensors not connected yet) |
+| I2C Bus | 🔄 Configured (sensors not connected yet) |
+| ICM20689 IMU | ⬜ Not tested (real sensor) |
+| BMP388 Barometer | ⬜ Not tested (real sensor) |
+| RC Receiver | ⬜ Not connected yet |
+| DShot | ⬜ Not started |
+| CAN/UAVCAN | ⬜ Not started |
 
 ## Quick Start
 
-```bash
-# Clone with submodules
-git clone --recursive -b samv7-custom git@github.com:bhanuprakashjh/PX4-Autopilot-Private.git
-cd PX4-Autopilot-Private
-
-# Build
-make microchip_samv71-xult-clickboards_default
-
-# Flash (with EDBG debugger)
-openocd -f interface/cmsis-dap.cfg -c "adapter speed 1000" -f target/atsamv.cfg \
-    -c "program build/microchip_samv71-xult-clickboards_default/microchip_samv71-xult-clickboards_default.elf verify reset exit"
-```
+See [QUICKSTART.md](QUICKSTART.md) for full clone, build, flash, and HITL setup instructions.
 
 ## Build Stats
 
 | Region | Used | Total | Usage |
 |--------|------|-------|-------|
-| Flash | 1,340,340 B | 2 MB | 63.91% |
-| SRAM | 52,588 B | 320 KB | 16.05% |
+| Flash | 1,352,048 B | 2 MB | 64.47% |
+| SRAM | 53,452 B | 448 KB | 11.65% |
 | nocache | 5 KB | 64 KB | 7.81% |
 
 ## NuttX Submodule
 
-This branch uses a forked NuttX with SAMV7 HSMCI/DMA fixes:
-- **Fork:** [bhanuprakashjh/NuttX](https://github.com/bhanuprakashjh/NuttX)
-- **Branch:** `px4_firmware_nuttx-samv7`
+This port uses a forked NuttX with PIC32CZ CA70 support:
+- **Fork:** [Vigneshjr1/NuttX](https://github.com/Vigneshjr1/NuttX)
+- **Branch:** `pic32cz-ca70-port`
+
+## Hardware
+
+- **Board:** PIC32CZ CA70 Curiosity (144-pin)
+- **QSPI Flash:** SST26VF032B 4MB
+- **Console:** J700 PKOB4 USB → `/dev/ttyACM0` (115200 baud)
+- **MAVLink:** J200 TARGET USB → `/dev/ttyACM1`
+
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [QUICKSTART.md](QUICKSTART.md) | Clone, build, flash and run |
+| [Port Status](docs/pic32czca70_px4_port_status.md) | Detailed port status and notes |
 
 ---
 
-*Branch: samv7-custom*
+*Branch: pic32cz-ca70-port*
