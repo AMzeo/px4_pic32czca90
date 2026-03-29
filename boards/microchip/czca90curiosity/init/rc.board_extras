@@ -1,0 +1,6 @@
+#!/bin/sh
+#
+# PIC32CZ CA90 Curiosity Ultra board extras
+#
+
+navigator start

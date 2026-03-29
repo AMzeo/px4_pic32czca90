@@ -1,4 +1,4 @@
-# PX4 Port to PIC32CZ CA70 Curiosity — Status Document
+# PX4 Port to PIC32CZ CA90 Curiosity — Status Document
 
 **Date:** March 2026
 **Branch:** `pic32cz-ca70-port`
@@ -10,8 +10,8 @@
 ## 1. Overview
 
 This document describes the work done to port PX4 autopilot firmware to the
-**Microchip PIC32CZ CA70 Curiosity** development board (144-pin variant). The
-PIC32CZ CA70 is a Cortex-M7 microcontroller with the same peripheral IP blocks
+**Microchip PIC32CZ CA90 Curiosity** development board (144-pin variant). The
+PIC32CZ CA90 is a Cortex-M7 microcontroller with the same peripheral IP blocks
 as the Microchip SAMV71, making it possible to base the port on the existing
 `samv71-xult-clickboards` PX4 board definition with targeted modifications.
 
@@ -25,8 +25,8 @@ the remaining steps before actual drone flight.
 
 | Item | Detail |
 |---|---|
-| Board | PIC32CZ CA70 Curiosity (EV46X93A) |
-| MCU | PIC32CZ CA70 (Cortex-M7, 144-pin) |
+| Board | PIC32CZ CA90 Curiosity (EV46X93A) |
+| MCU | PIC32CZ CA90 (Cortex-M7, 144-pin) |
 | Clock | 150 MHz (MCK) |
 | Flash | 2 MB internal |
 | SRAM | 512 KB (0x80000) |
@@ -38,39 +38,39 @@ the remaining steps before actual drone flight.
 
 ## 3. Port Strategy
 
-The PIC32CZ CA70 shares the same peripheral IP blocks as the SAMV71:
+The PIC32CZ CA90 shares the same peripheral IP blocks as the SAMV71:
 - Same USBHS controller (identical register map at 0x40038000)
 - Same SPI/QSPI/TWIHS/UART/USART controllers
 - Same PWMC, TC, AFEC peripherals
 - Same NuttX SAMV7 architecture support
 
 The port was created by cloning `boards/microchip/samv71-xult-clickboards` and
-making targeted changes for the PIC32CZ CA70 chip variant. NuttX was extended
-via submodule patches to add PIC32CZ CA70 chip support.
+making targeted changes for the PIC32CZ CA90 chip variant. NuttX was extended
+via submodule patches to add PIC32CZ CA90 chip support.
 
 ---
 
 ## 4. NuttX Submodule Changes
 
 The NuttX submodule (`platforms/nuttx/NuttX/nuttx`) was updated with multiple
-patches to support the PIC32CZ CA70:
+patches to support the PIC32CZ CA90:
 
 | Commit | Change |
 |---|---|
 | `7a62af7` | irq.h PIC32CZ fix |
 | `991448a` | chip.h PIC32CZ peripheral counts |
-| `be76bfe` | Full PIC32CZ CA70 chip support added to NuttX |
-| `9b04941` | QSPI driver fix for PIC32CZ CA70 |
+| `be76bfe` | Full PIC32CZ CA90 chip support added to NuttX |
+| `9b04941` | QSPI driver fix for PIC32CZ CA90 |
 | `6f96617` | HSMCI, progmem, EEFC PIC32CZ fixes |
 
 ---
 
 ## 5. Board Definition Files Created
 
-All files under `boards/microchip/pic32czca70-curiosity/`:
+All files under `boards/microchip/pic32czca90-curiosity/`:
 
 ```
-default.px4board              — CMake board config, chip=PIC32CZCA70144
+default.px4board              — CMake board config, chip=PIC32CZCA90144
 firmware.prototype            — board_id=1372, USB PID
 nuttx-config/include/board.h  — Clock, GPIO, peripheral pin assignments
 nuttx-config/include/board_dma_map.h — DMA channel allocation
@@ -93,21 +93,21 @@ src/qspi.c                    — QSPI flash init + MTD partition setup
 src/sam_hsmci.c               — HSMCI (SD card) board glue
 src/sam_mpuinit.c             — MPU nocache region for DMA buffers
 src/timer_config.cpp          — PWM IO timer config
-src/airframes/60200_pic32czca70_dev — Airframe definition
+src/airframes/60200_pic32czca90_dev — Airframe definition
 ```
 
 ---
 
 ## 6. Key Configuration Differences from SAMV71
 
-| Item | SAMV71 | PIC32CZ CA70 |
+| Item | SAMV71 | PIC32CZ CA90 |
 |---|---|---|
-| Chip name | SAMV71Q21 | PIC32CZCA70144 |
+| Chip name | SAMV71Q21 | PIC32CZCA90144 |
 | SRAM | 384 KB | 512 KB |
 | Board ID | 1371 | 1372 |
 | NSH console | USART1 | UART1 (PKOB4 virtual COM) |
 | QSPI flash | S25FL116K 2MB (W25 driver) | SST26VF032B 4MB (SST26 driver) |
-| airframe | 60100_samv71_dev | 60200_pic32czca70_dev |
+| airframe | 60100_samv71_dev | 60200_pic32czca90_dev |
 
 ---
 
@@ -182,7 +182,7 @@ Without these, `pwm_out status` shows `func: 0` and actuator_test has no effect.
 ## 8. Issues Encountered and Resolutions
 
 ### 8.1 SRAM Size Mismatch
-- **Problem:** Initial port used SAMV71 384 KB RAM size; PIC32CZ CA70 has 512 KB
+- **Problem:** Initial port used SAMV71 384 KB RAM size; PIC32CZ CA90 has 512 KB
 - **Fix:** Updated linker script `script.ld` and `CONFIG_RAM_SIZE=524288` in defconfig
 - **Commit:** `75d967b889`
 
@@ -218,7 +218,7 @@ Without these, `pwm_out status` shows `func: 0` and actuator_test has no effect.
 
 ### 9.1 USB Port Assignment
 
-The PIC32CZ CA70 Curiosity board has two USB connectors. Both must be connected
+The PIC32CZ CA90 Curiosity board has two USB connectors. Both must be connected
 to the Linux host for full development use:
 
 | Connector | USB Device | Linux Device | Used By |
@@ -250,7 +250,7 @@ rx: 0.0 B/s
 
 ### 9.3 Root Cause
 
-The USBHS peripheral on PIC32CZ CA70 is **not reset by a software/watchdog reset**.
+The USBHS peripheral on PIC32CZ CA90 is **not reset by a software/watchdog reset**.
 It retains state from the previous boot. When the USB cable remains physically
 connected across a board reset, the Linux host does not detect a disconnect/reconnect
 event and never sends a new USB bus reset. The device stays stuck in
@@ -330,17 +330,17 @@ Tools/simulation/jmavsim/jmavsim_run.sh -d /dev/ttyACM1 -b 57600 -q
 ```bash
 # Clone and setup
 git clone <repo>
-cd PX4-PIC32CZ-CA70
+cd PX4-PIC32CZ-CA90
 git checkout pic32cz-ca70-port
 git submodule update --init --recursive
 
 # Build firmware
-make microchip_pic32czca70-curiosity_default
+make microchip_pic32czca90-curiosity_default
 
 # Generate Intel HEX for MPLAB programming
 arm-none-eabi-objcopy -O ihex \
-  build/microchip_pic32czca70-curiosity_default/microchip_pic32czca70-curiosity_default.elf \
-  build/microchip_pic32czca70-curiosity_default/microchip_pic32czca70-curiosity_default.hex
+  build/microchip_pic32czca90-curiosity_default/microchip_pic32czca90-curiosity_default.elf \
+  build/microchip_pic32czca90-curiosity_default/microchip_pic32czca90-curiosity_default.hex
 ```
 
 **Output files:**
@@ -358,13 +358,13 @@ arm-none-eabi-objcopy -O ihex \
 
 | File | Purpose |
 |---|---|
-| `boards/microchip/pic32czca70-curiosity/default.px4board` | Top-level board config |
-| `boards/microchip/pic32czca70-curiosity/nuttx-config/include/board.h` | All GPIO/clock/peripheral pin assignments |
-| `boards/microchip/pic32czca70-curiosity/nuttx-config/nsh/defconfig` | NuttX Kconfig options |
-| `boards/microchip/pic32czca70-curiosity/nuttx-config/scripts/script.ld` | Linker script |
-| `boards/microchip/pic32czca70-curiosity/src/board_config.h` | PX4 GPIO macros, ADC config, QSPI partition layout |
-| `boards/microchip/pic32czca70-curiosity/src/init.c` | Board initialization sequence |
-| `boards/microchip/pic32czca70-curiosity/src/qspi.c` | QSPI flash + MTD partitions |
-| `boards/microchip/pic32czca70-curiosity/init/rc.board_defaults` | Default PX4 parameters |
-| `boards/microchip/pic32czca70-curiosity/init/rc.board_mavlink` | MAVLink/USB startup script |
-| `platforms/nuttx/NuttX/nuttx` | NuttX submodule (patched for PIC32CZ CA70) |
+| `boards/microchip/pic32czca90-curiosity/default.px4board` | Top-level board config |
+| `boards/microchip/pic32czca90-curiosity/nuttx-config/include/board.h` | All GPIO/clock/peripheral pin assignments |
+| `boards/microchip/pic32czca90-curiosity/nuttx-config/nsh/defconfig` | NuttX Kconfig options |
+| `boards/microchip/pic32czca90-curiosity/nuttx-config/scripts/script.ld` | Linker script |
+| `boards/microchip/pic32czca90-curiosity/src/board_config.h` | PX4 GPIO macros, ADC config, QSPI partition layout |
+| `boards/microchip/pic32czca90-curiosity/src/init.c` | Board initialization sequence |
+| `boards/microchip/pic32czca90-curiosity/src/qspi.c` | QSPI flash + MTD partitions |
+| `boards/microchip/pic32czca90-curiosity/init/rc.board_defaults` | Default PX4 parameters |
+| `boards/microchip/pic32czca90-curiosity/init/rc.board_mavlink` | MAVLink/USB startup script |
+| `platforms/nuttx/NuttX/nuttx` | NuttX submodule (patched for PIC32CZ CA90) |

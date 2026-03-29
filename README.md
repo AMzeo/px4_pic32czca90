@@ -1,6 +1,6 @@
-# PX4 Autopilot — PIC32CZ CA70 Port
+# PX4 Autopilot — PIC32CZ CA90 Port
 
-This branch contains PX4 Autopilot ported to the **Microchip PIC32CZ CA70 Curiosity** development board.
+This branch contains PX4 Autopilot ported to the **Microchip PIC32CZ CA90 Curiosity** development board.
 
 ## Port Status
 
@@ -38,13 +38,13 @@ See [QUICKSTART.md](QUICKSTART.md) for full clone, build, flash, and HITL setup 
 
 ## NuttX Submodule
 
-This port uses a forked NuttX with PIC32CZ CA70 support:
+This port uses a forked NuttX with PIC32CZ CA90 support:
 - **Fork:** [Vigneshjr1/NuttX](https://github.com/Vigneshjr1/NuttX)
 - **Branch:** `pic32cz-ca70-port`
 
 ## Hardware
 
-- **Board:** PIC32CZ CA70 Curiosity (144-pin)
+- **Board:** PIC32CZ CA90 Curiosity (144-pin)
 - **QSPI Flash:** SST26VF032B 4MB
 - **Console:** J700 PKOB4 USB → `/dev/ttyACM0` (115200 baud)
 - **MAVLink:** J200 TARGET USB → `/dev/ttyACM1`
@@ -54,7 +54,7 @@ This port uses a forked NuttX with PIC32CZ CA70 support:
 | Document | Description |
 |----------|-------------|
 | [QUICKSTART.md](QUICKSTART.md) | Clone, build, flash and run |
-| [Port Status](docs/pic32czca70_px4_port_status.md) | Detailed port status and notes |
+| [Port Status](docs/pic32czca90_px4_port_status.md) | Detailed port status and notes |
 
 ---
 

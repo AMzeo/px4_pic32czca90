@@ -1,0 +1,7 @@
+#!/bin/sh
+#
+# PIC32CZ CA90 Curiosity Ultra - sensors init
+#
+# No sensors configured yet. Add sensor start commands here
+# as Click boards or other sensors are connected.
+#

@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(///wsl.localhost/Ubuntu/home/**)",
+      "Read(///wsl.localhost/Ubuntu//**)",
+      "Bash(grep -r \"pic32czca90\\\\|CA90\" . --include=*.c --include=*.h --include=*.S --include=*.ld --include=*.cfg)",
+      "WebFetch(domain:github.com)",
+      "WebSearch",
+      "WebFetch(domain:api.github.com)",
+      "Bash(find /home/amzeo/px4_pic32czca70/ -path *pic32czca90* -type f)",
+      "Bash(find /home/amzeo/px4_pic32czca70/ -path *czca90* -type f)",
+      "Bash(git -C /home/amzeo/px4_pic32czca70/platforms/nuttx/NuttX/nuttx log --oneline -10)",
+      "Bash(mkdir -p \"//wsl.localhost/Ubuntu/home/amzeo/px4_pic32czca70/platforms/nuttx/NuttX/nuttx/boards/arm/pic32czca90/pic32czca90-curiosity/include\")",
+      "Bash(mkdir -p \"//wsl.localhost/Ubuntu/home/amzeo/px4_pic32czca70/platforms/nuttx/NuttX/nuttx/boards/arm/pic32czca90/pic32czca90-curiosity/configs/nsh\")",
+      "Bash(mkdir -p \"//wsl.localhost/Ubuntu/home/amzeo/px4_pic32czca70/platforms/nuttx/NuttX/nuttx/boards/arm/pic32czca90/pic32czca90-curiosity/scripts\")",
+      "Bash(mkdir -p \"//wsl.localhost/Ubuntu/home/amzeo/px4_pic32czca70/platforms/nuttx/NuttX/nuttx/boards/arm/pic32czca90/pic32czca90-curiosity/src\")",
+      "Bash(make microchip_czca90curiosity_default)",
+      "Bash(wsl -d Ubuntu -- bash -c \"cd /home/amzeo/px4_pic32czca70 && make microchip_czca90curiosity_default 2>&1 | tail -40\")",
+      "Bash(wsl -d Ubuntu -- bash -c \"cd /home/amzeo/px4_pic32czca70 && make microchip_czca90curiosity_default 2>&1 | tail -50\")",
+      "Bash(wsl -d Ubuntu -- bash -c \"cd /home/amzeo/px4_pic32czca70 && make microchip_czca90curiosity_default 2>&1 | grep -E ''FAILED|error:|ninja:'' | head -20\")",
+      "Bash(wsl -d Ubuntu -- bash -c \"cd /home/amzeo/px4_pic32czca70 && make microchip_czca90curiosity_default 2>&1 | grep -E ''FAILED|error:|ninja:|Linking'' | head -30\")",
+      "Bash(git config:*)",
+      "Bash(git submodule:*)",
+      "Bash(find /home/amzeo/px4_pic32czca90 -type d -name *ca90* -o -type d -name *czca90*)",
+      "Bash(xargs grep:*)",
+      "Bash(arm-none-eabi-gcc --version)",
+      "Bash(wsl.exe -e bash -c \"which make && which cmake && which arm-none-eabi-gcc\")",
+      "Bash(wsl.exe -e bash -c \"cd /home/amzeo/px4_pic32czca90 && make microchip_czca90curiosity_default 2>&1\")",
+      "Bash(wsl.exe -e bash -c \"cd /home/amzeo/px4_pic32czca90 && rm -rf build/microchip_czca90curiosity_default && make microchip_czca90curiosity_default 2>&1\")",
+      "Bash(wsl.exe -e bash -c \"cat /home/amzeo/px4_pic32czca90/platforms/nuttx/NuttX/apps/Kconfig | head -15\")",
+      "Bash(wsl.exe -e bash -c \"cd /home/amzeo/px4_pic32czca90/platforms/nuttx/NuttX/nuttx && git log --oneline -5\")",
+      "Bash(wsl.exe -e bash -c \"cat /home/amzeo/px4_pic32czca90/Tools/check_submodules.sh | head -50\")",
+      "Bash(wsl.exe -e bash -c \"cd /home/amzeo/px4_pic32czca90/platforms/nuttx/NuttX/apps && ls tools/mkkconfig.sh Makefile 2>/dev/null && head -30 tools/mkkconfig.sh\")",
+      "Bash(wsl.exe -e bash -c \"cd /home/amzeo/px4_pic32czca90/platforms/nuttx/NuttX/apps && bash tools/mkkconfig.sh 2>&1 && head -15 Kconfig\")",
+      "Bash(wsl.exe -e bash -c \"cd /home/amzeo/px4_pic32czca90 && rm -rf build/microchip_czca90curiosity_default && yes y | make microchip_czca90curiosity_default 2>&1\")"
+    ]
+  }
+}

@@ -1,0 +1,12 @@
+#!/bin/sh
+#
+# MAVLink enabled on USB CDC/ACM
+# Note: MAV_0_CONFIG 101 set in rc.board_defaults
+
+# Create USB CDC/ACM device (/dev/ttyACM0) before rc.serial starts MAVLink.
+sercon
+
+# Wait for USB CDC/ACM enumeration to complete on the host
+sleep 2
+
+echo "INFO: Board mavlink config - USB CDC/ACM enabled"
