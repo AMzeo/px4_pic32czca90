@@ -43,6 +43,7 @@
 /* No ADC / battery monitoring yet — use digital brick to avoid ADC dependency */
 #define BOARD_NUMBER_BRICKS          1
 #define BOARD_NUMBER_DIGITAL_BRICKS  1
+#define BOARD_ADC_BRICK_VALID        (1)
 
 /* No sensors, PWM, QSPI, SD card configured yet.
  * These will be added as peripheral drivers are ported.
@@ -64,6 +65,10 @@
 #define PX4_GPIO_INIT_LIST { \
 		GPIO_nLED_BLUE, \
 	}
+
+/* Hardfault log path */
+#define HARDFAULT_ULOG_PATH "/fs/microsd"
+#define HARDFAULT_MAX_ULOG_FILE_LEN 80
 
 /* Console buffer */
 #define BOARD_ENABLE_CONSOLE_BUFFER

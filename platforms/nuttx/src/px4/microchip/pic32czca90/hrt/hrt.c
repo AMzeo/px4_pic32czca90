@@ -49,6 +49,12 @@
 /* CPU frequency in MHz for cycle-to-microsecond conversion */
 #define CPU_MHZ     (BOARD_CPU_FREQUENCY / 1000000)
 
+/* Latency histogram for perf_print_latency */
+#define LATENCY_BUCKET_COUNT 8
+const uint16_t latency_bucket_count = LATENCY_BUCKET_COUNT;
+const uint16_t latency_buckets[LATENCY_BUCKET_COUNT] = { 1, 2, 5, 10, 20, 50, 100, 1000 };
+__EXPORT uint32_t latency_counters[LATENCY_BUCKET_COUNT + 1];
+
 /* Overflow tracking: DWT CYCCNT is 32-bit at 300 MHz = wraps every ~14.3s.
  * We track overflow via SysTick-rate polling in hrt_absolute_time().
  */

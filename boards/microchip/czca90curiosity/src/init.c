@@ -23,6 +23,7 @@
 
 #include <nuttx/config.h>
 #include <nuttx/board.h>
+#include <nuttx/usb/usbdev.h>
 
 #include <arch/board/board.h>
 #include "arm_internal.h"
@@ -38,6 +39,62 @@ extern void led_init(void);
 extern void led_on(int led);
 extern void led_off(int led);
 __END_DECLS
+
+/************************************************************************************
+ * Name: arm_addregion
+ *
+ * Description:
+ *   Add additional memory regions to the heap. Stub for boards with
+ *   only single-region SRAM.
+ ************************************************************************************/
+
+#if CONFIG_MM_REGIONS > 1
+void arm_addregion(void)
+{
+}
+#endif
+
+/************************************************************************************
+ * Name: arm_usbinitialize
+ *
+ * Description:
+ *   Called from NuttX up_initialize() when USB is enabled.
+ *   Stub — no USB peripheral driver for PIC32CZ CA90 yet.
+ ************************************************************************************/
+
+#if defined(CONFIG_USBDEV) || defined(CONFIG_USBHOST)
+void arm_usbinitialize(void)
+{
+}
+#endif
+
+/************************************************************************************
+ * Name: board_read_VBUS_state
+ ************************************************************************************/
+
+int board_read_VBUS_state(void)
+{
+	return 0;
+}
+
+/************************************************************************************
+ * USB device controller stubs — no USB peripheral driver for PIC32CZ CA90 yet.
+ * These allow the build to link with CONFIG_USBDEV=y / CONFIG_CDCACM=y.
+ ************************************************************************************/
+
+#ifdef CONFIG_USBDEV
+int usbdev_register(FAR struct usbdevclass_driver_s *driver)
+{
+	(void)driver;
+	return -ENODEV;
+}
+
+int usbdev_unregister(FAR struct usbdevclass_driver_s *driver)
+{
+	(void)driver;
+	return -ENODEV;
+}
+#endif
 
 /************************************************************************************
  * Name: board_peripheral_reset

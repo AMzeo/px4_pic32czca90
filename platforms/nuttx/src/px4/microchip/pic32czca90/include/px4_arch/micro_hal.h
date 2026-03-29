@@ -34,6 +34,7 @@
 
 #include <px4_platform/micro_hal.h>
 #include <nuttx/i2c/i2c_master.h>
+#include <chip.h>
 
 __BEGIN_DECLS
 
