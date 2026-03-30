@@ -4,8 +4,36 @@
  *
  * PIC32CZ CA90 Curiosity Ultra board configuration for PX4
  *
- * This is the PX4 copy of the NuttX board.h. It is used when building
- * with CONFIG_ARCH_BOARD_CUSTOM=y pointing to this nuttx-config directory.
+ * CHANGES vs previous version:
+ *
+ *   FIX A (CRITICAL – no TX output):
+ *     BOARD_SERCOM4_MUXCONFIG was (USART_CTRLA_TXPAD0_2 | USART_CTRLA_RXPAD1).
+ *     USART_CTRLA_TXPAD0_2 = (2 << TXPO_SHIFT) → TXPO=2 which activates
+ *     hardware CTS on SERCOM4_PAD3. With PAD3 unconnected and floating high,
+ *     the USART hardware sees CTS deasserted and suppresses all TX. Changed
+ *     to USART_CTRLA_TXPO_PAD0 (TXPO=0) which is TX-only on PAD0 (PC21)
+ *     with no flow control. RX stays RXPO=1 (PAD1, PC22). Confirmed correct
+ *     for the PKoB4 VCP connection on the Curiosity Ultra schematic.
+ *
+ *   FIX B (CRITICAL – unstable UART clock during bringup):
+ *     BOARD_SERCOM4_COREGEN was 1 (GCLK1 = DFLL48M, 48 MHz). In open-loop
+ *     mode without USB connected the DFLL may be unstable at boot, producing
+ *     wrong baud rates. Changed to GCLK5 (6 MHz, straight from verified
+ *     XOSC0 crystal) for a rock-solid console clock at bringup. Baud error
+ *     at 6 MHz / 115200 = 0.003%.  Re-point to GCLK1 once DFLL is proven.
+ *     BOARD_SERCOM4_FREQUENCY updated to match (BOARD_GCLK5_FREQUENCY).
+ *
+ *   FIX C (MODERATE – DFLL WAITLOCK in open-loop):
+ *     BOARD_DFLL_WAITLOCK changed from TRUE to FALSE. In open-loop mode
+ *     (BOARD_DFLL_MODE=FALSE) the CTRLB.WAITLOCK bit tells the hardware to
+ *     hold the DFLL output until a stable lock condition – a condition that
+ *     may never occur without the USB SOF reference. This would prevent
+ *     GCLK1 from producing any clock at all, starving USB later on.
+ *
+ *   FIX D (COMMENT): XOSC0_FREQUENCY comment corrected to 12 MHz. The
+ *     previous sam_clockconfig.c header mistakenly said "24 MHz". The define
+ *     was always 12 MHz (DSC6011JI2B-012.0000). The GCLK5 DIV=2 and
+ *     DPLL0 LDR=49 math remains unchanged (6 MHz × 50 = 300 MHz CPU).
  ****************************************************************************/
 
 #ifndef __BOARDS_MICROCHIP_CZCA90CURIOSITY_NUTTX_CONFIG_INCLUDE_BOARD_H
@@ -25,9 +53,11 @@
  *
  * PIC32CZ CA90 Curiosity Ultra clock chain:
  *
- *   XOSC0 (24 MHz MEMS oscillator, XTALEN=0)
+ *   XOSC0: Y300 = DSC6011JI2B-012.0000 = 12 MHz MEMS (XTALEN=0, ext clock)
  *     |
- *   GCLK5 (÷4 = 6 MHz)  -- configured first, before DPLLs
+ *   GCLK5 (÷2 = 6 MHz)  -- configured first (SET1), before DPLLs
+ *     |-- GCLK_PCHCTRL[1] (DPLL0 reference)   ← FIX: was missing
+ *     |-- SERCOM4 core clock (console UART)    ← FIX B
  *     |
  *   DPLL0 (LDR=49, ×50 = 300 MHz)
  *     |
@@ -35,14 +65,14 @@
  *     |
  *   MCLK CPUDIV=1 → CPU @ 300 MHz
  *
- *   DFLL48M (open loop, USB CRM) → 48 MHz → GCLK1 (for USB, SERCOM)
+ *   DFLL48M (open loop, USB CRM) → 48 MHz → GCLK1 (for USB)
  */
 
 /* Oscillator frequencies */
 
-#define BOARD_XOSC0_FREQUENCY    12000000   /* 12 MHz MEMS oscillator Y300: DSC6011JI2B-012.0000 */
+#define BOARD_XOSC0_FREQUENCY    12000000   /* 12 MHz – DSC6011JI2B-012.0000 */
 #define BOARD_XOSC1_FREQUENCY    0          /* XOSC1 not used */
-#define BOARD_XOSC32K_FREQUENCY  32768      /* 32.768 KHz (if present) */
+#define BOARD_XOSC32K_FREQUENCY  32768      /* 32.768 kHz (if present) */
 #define BOARD_OSC32K_FREQUENCY   32768      /* OSCULP32K nominal */
 #define BOARD_DFLL_FREQUENCY     48000000   /* DFLL48M output */
 #define BOARD_DPLL0_FREQUENCY    300000000  /* DPLL0 output: 6 MHz × 50 */
@@ -50,23 +80,23 @@
 
 /* GCLK frequencies */
 
-#define BOARD_GCLK0_FREQUENCY    BOARD_DPLL0_FREQUENCY    /* 300 MHz */
-#define BOARD_GCLK1_FREQUENCY    BOARD_DFLL_FREQUENCY     /* 48 MHz */
-#define BOARD_GCLK2_FREQUENCY    0                        /* Disabled */
-#define BOARD_GCLK3_FREQUENCY    BOARD_OSC32K_FREQUENCY   /* 32.768 KHz */
-#define BOARD_GCLK4_FREQUENCY    BOARD_DPLL0_FREQUENCY    /* 300 MHz */
-#define BOARD_GCLK5_FREQUENCY    (BOARD_XOSC0_FREQUENCY / 2) /* 6 MHz */
-#define BOARD_GCLK6_FREQUENCY    0                        /* Disabled */
-#define BOARD_GCLK7_FREQUENCY    0                        /* Disabled */
-#define BOARD_GCLK8_FREQUENCY    0                        /* Disabled */
-#define BOARD_GCLK9_FREQUENCY    0                        /* Disabled */
-#define BOARD_GCLK10_FREQUENCY   0                        /* Disabled */
-#define BOARD_GCLK11_FREQUENCY   0                        /* Disabled */
+#define BOARD_GCLK0_FREQUENCY    BOARD_DPLL0_FREQUENCY          /* 300 MHz  */
+#define BOARD_GCLK1_FREQUENCY    BOARD_DFLL_FREQUENCY           /* 48 MHz   */
+#define BOARD_GCLK2_FREQUENCY    0                              /* Disabled */
+#define BOARD_GCLK3_FREQUENCY    BOARD_OSC32K_FREQUENCY         /* 32.768kHz*/
+#define BOARD_GCLK4_FREQUENCY    BOARD_DPLL0_FREQUENCY          /* 300 MHz  */
+#define BOARD_GCLK5_FREQUENCY    (BOARD_XOSC0_FREQUENCY / 2)   /* 6 MHz    */
+#define BOARD_GCLK6_FREQUENCY    0                              /* Disabled */
+#define BOARD_GCLK7_FREQUENCY    0
+#define BOARD_GCLK8_FREQUENCY    0
+#define BOARD_GCLK9_FREQUENCY    0
+#define BOARD_GCLK10_FREQUENCY   0
+#define BOARD_GCLK11_FREQUENCY   0
 
-#define BOARD_CPU_FREQUENCY      BOARD_GCLK0_FREQUENCY    /* 300 MHz */
-#define BOARD_MCK_FREQUENCY      BOARD_GCLK0_FREQUENCY    /* 300 MHz */
+#define BOARD_CPU_FREQUENCY      BOARD_GCLK0_FREQUENCY  /* 300 MHz */
+#define BOARD_MCK_FREQUENCY      BOARD_GCLK0_FREQUENCY  /* 300 MHz */
 
-/* XOSC32K - use internal OSCULP32K (no external 32K crystal) */
+/* XOSC32K - not used, rely on internal OSCULP32K */
 
 #define BOARD_HAVE_XOSC32K       0
 #define BOARD_XOSC32K_ENABLE     FALSE
@@ -83,7 +113,7 @@
 #define BOARD_XOSC32K_CALIB      0
 #define BOARD_XOSC32K_RTCSEL     0
 
-/* XOSC0 - 24 MHz MEMS oscillator (XTALEN=0 = external clock, NOT crystal) */
+/* XOSC0 - 12 MHz MEMS oscillator (XTALEN=0 = external clock, not crystal) */
 
 #define BOARD_HAVE_XOSC0         1
 #define BOARD_XOSC0_ENABLE       TRUE
@@ -111,14 +141,17 @@
 
 /* GCLK configuration
  *
- * GCLK_SET1 - configured before DPLLs (needed as DPLL reference)
- * GCLK_SET2 - configured after DPLLs
+ * GCLK_SET1: configured BEFORE DPLLs (provides DPLL reference)
+ * GCLK_SET2: configured AFTER DPLLs
+ *
+ * Bits: GCLK5 (bit 5) is in SET1.
+ * All others in SET2 (0x0fdf = bits 0-4, 6-11).
  */
 
-#define BOARD_GCLK_SET1          0x0020    /* Pre-configure: GCLK5 */
-#define BOARD_GCLK_SET2          0x0fdf    /* Post-configure: all except GCLK5 */
+#define BOARD_GCLK_SET1          0x0020    /* SET1: GCLK5 only */
+#define BOARD_GCLK_SET2          0x0fdf    /* SET2: all except GCLK5 */
 
-/* GCLK0 - CPU clock from DPLL0 (300 MHz) */
+/* GCLK0 - 300 MHz CPU clock from DPLL0 */
 
 #define BOARD_GCLK0_ENABLE       TRUE
 #define BOARD_GCLK0_OOV          FALSE
@@ -128,7 +161,7 @@
 #define BOARD_GCLK0_SOURCE       7         /* DPLL0 output */
 #define BOARD_GCLK0_DIV          1
 
-/* GCLK1 - 48 MHz from DFLL (for USB, SERCOM clocking) */
+/* GCLK1 - 48 MHz from DFLL (for USB) */
 
 #define BOARD_GCLK1_ENABLE       TRUE
 #define BOARD_GCLK1_OOV          FALSE
@@ -146,7 +179,7 @@
 #define BOARD_GCLK2_SOURCE       1
 #define BOARD_GCLK2_DIV          1
 
-/* GCLK3 - 32.768 KHz from OSCULP32K (slow clock for SERCOM) */
+/* GCLK3 - 32.768 kHz from OSCULP32K (slow clock for SERCOM slow, WDT) */
 
 #define BOARD_GCLK3_ENABLE       TRUE
 #define BOARD_GCLK3_OOV          FALSE
@@ -155,7 +188,7 @@
 #define BOARD_GCLK3_SOURCE       4         /* OSCULP32K */
 #define BOARD_GCLK3_DIV          1
 
-/* GCLK4 - 300 MHz from DPLL0 (for peripherals that need high-speed) */
+/* GCLK4 - 300 MHz from DPLL0 */
 
 #define BOARD_GCLK4_ENABLE       TRUE
 #define BOARD_GCLK4_OOV          FALSE
@@ -164,14 +197,17 @@
 #define BOARD_GCLK4_SOURCE       7         /* DPLL0 output */
 #define BOARD_GCLK4_DIV          1
 
-/* GCLK5 - 6 MHz from XOSC0 ÷ 4 (DPLL0 reference) */
+/* GCLK5 - 6 MHz from XOSC0 ÷ 2
+ *   Primary purpose: DPLL0 reference (routed via GCLK_PCHCTRL[1])
+ *   Secondary (bringup): console SERCOM4 core clock → 115200 baud error=0.003%
+ */
 
 #define BOARD_GCLK5_ENABLE       TRUE
 #define BOARD_GCLK5_OOV          FALSE
 #define BOARD_GCLK5_OE           FALSE
 #define BOARD_GCLK5_RUNSTDBY     FALSE
-#define BOARD_GCLK5_SOURCE       0         /* XOSC0 */
-#define BOARD_GCLK5_DIV          2         /* 12 MHz / 2 = 6 MHz (DPLL0 ref) */
+#define BOARD_GCLK5_SOURCE       0         /* XOSC0 (12 MHz) */
+#define BOARD_GCLK5_DIV          2         /* 12 MHz / 2 = 6 MHz */
 
 /* GCLK6-11 - disabled */
 
@@ -217,7 +253,12 @@
 #define BOARD_GCLK11_SOURCE      1
 #define BOARD_GCLK11_DIV         1
 
-/* DFLL48M - open loop, USB clock recovery mode */
+/* DFLL48M - open loop
+ *
+ * FIX C: BOARD_DFLL_WAITLOCK must be FALSE in open-loop mode.
+ * CTRLB.WAITLOCK=1 in open-loop holds the output clock until stability is
+ * signalled — this may never happen without USB, leaving GCLK1 dead.
+ */
 
 #define BOARD_DFLL_ENABLE        TRUE
 #define BOARD_DFLL_RUNSTDBY      FALSE
@@ -229,7 +270,7 @@
 #define BOARD_DFLL_CCDIS         TRUE
 #define BOARD_DFLL_QLDIS         FALSE
 #define BOARD_DFLL_BPLCKC        FALSE
-#define BOARD_DFLL_WAITLOCK      TRUE
+#define BOARD_DFLL_WAITLOCK      FALSE     /* FIX C: was TRUE → starved GCLK1 */
 #define BOARD_DFLL_CALIBEN       FALSE
 #define BOARD_DFLL_GCLKLOCK      FALSE
 #define BOARD_DFLL_FCALIB        128
@@ -239,7 +280,12 @@
 #define BOARD_DFLL_GCLK          3
 #define BOARD_DFLL_MUL           0
 
-/* DPLL0 - 300 MHz from GCLK5 (6 MHz × 50) */
+/* DPLL0 - 300 MHz from GCLK5 (6 MHz × 50)
+ *
+ *   CTRLB.REFCLK = 0 → GCLK reference (routes through GCLK_PCHCTRL[1])
+ *   DPLL0_GCLK   = 5 → GCLK5 feeds GCLK_PCHCTRL[1]
+ *     (sam_clockconfig.c now calls sam_gclk_chan_enable() for this)
+ */
 
 #define BOARD_DPLL0_ENABLE       TRUE
 #define BOARD_DPLL0_DCOEN        FALSE
@@ -252,10 +298,10 @@
 #define BOARD_DPLL0_LTIME        0
 #define BOARD_DPLL0_FILTER       0
 #define BOARD_DPLL0_DCOFILTER    0
-#define BOARD_DPLL0_GCLK         5         /* GCLK5 as reference */
+#define BOARD_DPLL0_GCLK         5         /* GCLK5 feeds DPLL0 via PCHCTRL[1] */
 #define BOARD_DPLL0_GCLKLOCK     0
 #define BOARD_DPLL0_LDRFRAC      0
-#define BOARD_DPLL0_LDRINT       49        /* LDR = 49 → multiply by 50 */
+#define BOARD_DPLL0_LDRINT       49        /* 6 MHz × (49+1) = 300 MHz */
 #define BOARD_DPLL0_DIV          0
 
 /* DPLL1 - not used */
@@ -281,7 +327,7 @@
 
 #define BOARD_MCLK_CPUDIV        1
 
-/* Flash wait states */
+/* Flash wait states (FCR manages this automatically on CZCA90) */
 
 #define BOARD_FLASH_WAITSTATES   8
 
@@ -292,14 +338,14 @@
 
 #define BOARD_LED0_BIT           (1 << BOARD_LED0)
 
-#define LED_STARTED              0  /* OFF */
-#define LED_HEAPALLOCATE         0  /* OFF */
-#define LED_IRQSENABLED          0  /* OFF */
-#define LED_STACKCREATED         1  /* ON */
-#define LED_INIRQ                2  /* N/C */
-#define LED_SIGNAL               2  /* N/C */
-#define LED_ASSERTION            2  /* N/C */
-#define LED_PANIC                3  /* FLASH */
+#define LED_STARTED              0
+#define LED_HEAPALLOCATE         0
+#define LED_IRQSENABLED          0
+#define LED_STACKCREATED         1
+#define LED_INIRQ                2
+#define LED_SIGNAL               2
+#define LED_ASSERTION            2
+#define LED_PANIC                3
 #undef  LED_IDLE
 
 /* Button definitions *******************************************************/
@@ -310,33 +356,51 @@
 
 /* SERCOM configuration *****************************************************/
 
-/* SERCOM slow clock (common to all SERCOMs) */
+/* SERCOM slow clock – shared by all SERCOMs */
 
 #define BOARD_SERCOM_SLOWGEN     3
 #define BOARD_SERCOM_SLOWLOCK    FALSE
 #define BOARD_SLOWCLOCK_FREQUENCY BOARD_GCLK3_FREQUENCY
 
-/* SERCOM4 - Console UART (debug via PKOB4)
- *   PC21 = SERCOM4 PAD0 (TX), function E
- *   PC22 = SERCOM4 PAD1 (RX), function E
+/* SERCOM4 – Console UART (debug via PKoB4 VCP)
+ *   PKoB4 APP_VCP: PC21 (PAD0 = TX), PC22 (PAD1 = RX), peripheral func E
+ *
+ * FIX A: muxconfig changed from (USART_CTRLA_TXPAD0_2 | USART_CTRLA_RXPAD1)
+ *   to (USART_CTRLA_TXPO_PAD0 | USART_CTRLA_RXPAD1).
+ *
+ *   USART_CTRLA_TXPAD0_2 = (2 << TXPO_SHIFT) = TXPO=2 which enables
+ *   hardware CTS on SERCOM4_PAD3. If PAD3 floats high the hardware will
+ *   see CTS deasserted and suppress every TX byte. The console produces
+ *   no output.
+ *
+ *   USART_CTRLA_TXPO_PAD0 = (0 << TXPO_SHIFT) = TXPO=0 means TX on PAD0
+ *   only, no flow control pads active. RX stays RXPO=1 (PAD1).
+ *
+ * FIX B: BOARD_SERCOM4_COREGEN changed from 1 (GCLK1 = DFLL) to 5 (GCLK5
+ *   = 6 MHz from XOSC0). The DFLL in open-loop without USB may be unstable
+ *   at boot. GCLK5 is derived directly from the verified MEMS oscillator
+ *   and is stable immediately. Baud rate error at 6 MHz / 115200 = 0.003%.
+ *
+ *   To revert to DFLL after bringup: set COREGEN=1, FREQUENCY=BOARD_GCLK1_FREQUENCY.
  */
 
-#define BOARD_SERCOM4_MUXCONFIG  (USART_CTRLA_TXPAD0_2 | USART_CTRLA_RXPAD1)
-#define BOARD_SERCOM4_PINMAP_PAD0 PORT_SERCOM4_PAD0
-#define BOARD_SERCOM4_PINMAP_PAD1 PORT_SERCOM4_PAD1
+#define BOARD_SERCOM4_MUXCONFIG   (USART_CTRLA_TXPO_PAD0 | USART_CTRLA_RXPAD1)
+                                  /* FIX A: was TXPAD0_2 (TXPO=2, enables CTS) */
+#define BOARD_SERCOM4_PINMAP_PAD0 PORT_SERCOM4_PAD0  /* PC21 TX, func E */
+#define BOARD_SERCOM4_PINMAP_PAD1 PORT_SERCOM4_PAD1  /* PC22 RX, func E */
 #define BOARD_SERCOM4_PINMAP_PAD2 0
 #define BOARD_SERCOM4_PINMAP_PAD3 0
 
-#define BOARD_TXIRQ_SERCOM4      SAM_IRQ_SERCOM4_0
-#define BOARD_RXIRQ_SERCOM4      SAM_IRQ_SERCOM4_2
+#define BOARD_TXIRQ_SERCOM4       SAM_IRQ_SERCOM4_0
+#define BOARD_RXIRQ_SERCOM4       SAM_IRQ_SERCOM4_2
 
-#define BOARD_SERCOM4_COREGEN    1
-#define BOARD_SERCOM4_CORELOCK   FALSE
-#define BOARD_SERCOM4_FREQUENCY  BOARD_GCLK1_FREQUENCY
+#define BOARD_SERCOM4_COREGEN     5          /* FIX B: GCLK5 (6 MHz, stable) */
+#define BOARD_SERCOM4_CORELOCK    FALSE
+#define BOARD_SERCOM4_FREQUENCY   BOARD_GCLK5_FREQUENCY  /* FIX B: 6 MHz */
 
-/* SERCOM0 - spare (PA04/PA05, function E) */
+/* SERCOM0 - spare (PA04/PA05, function D) */
 
-#define BOARD_SERCOM0_MUXCONFIG  (USART_CTRLA_TXPAD0_2 | USART_CTRLA_RXPAD1)
+#define BOARD_SERCOM0_MUXCONFIG  (USART_CTRLA_TXPO_PAD0 | USART_CTRLA_RXPAD1)
 #define BOARD_SERCOM0_PINMAP_PAD0 PORT_SERCOM0_PAD0
 #define BOARD_SERCOM0_PINMAP_PAD1 PORT_SERCOM0_PAD1
 #define BOARD_SERCOM0_PINMAP_PAD2 0
@@ -349,7 +413,7 @@
 
 /* SERCOM1 (PA16/PA17, function C) */
 
-#define BOARD_SERCOM1_MUXCONFIG  (USART_CTRLA_TXPAD0_2 | USART_CTRLA_RXPAD1)
+#define BOARD_SERCOM1_MUXCONFIG  (USART_CTRLA_TXPO_PAD0 | USART_CTRLA_RXPAD1)
 #define BOARD_SERCOM1_PINMAP_PAD0 PORT_SERCOM1_PAD0
 #define BOARD_SERCOM1_PINMAP_PAD1 PORT_SERCOM1_PAD1
 #define BOARD_SERCOM1_PINMAP_PAD2 0
@@ -360,9 +424,9 @@
 #define BOARD_SERCOM1_CORELOCK   FALSE
 #define BOARD_SERCOM1_FREQUENCY  BOARD_GCLK1_FREQUENCY
 
-/* SERCOM2 (PA12/PA13, function C) */
+/* SERCOM2 (PC08/PC09, function E) */
 
-#define BOARD_SERCOM2_MUXCONFIG  (USART_CTRLA_TXPAD0_2 | USART_CTRLA_RXPAD1)
+#define BOARD_SERCOM2_MUXCONFIG  (USART_CTRLA_TXPO_PAD0 | USART_CTRLA_RXPAD1)
 #define BOARD_SERCOM2_PINMAP_PAD0 PORT_SERCOM2_PAD0
 #define BOARD_SERCOM2_PINMAP_PAD1 PORT_SERCOM2_PAD1
 #define BOARD_SERCOM2_PINMAP_PAD2 0
@@ -373,9 +437,9 @@
 #define BOARD_SERCOM2_CORELOCK   FALSE
 #define BOARD_SERCOM2_FREQUENCY  BOARD_GCLK1_FREQUENCY
 
-/* SERCOM3 (PA22/PA23, function C) */
+/* SERCOM3 (PC12/PC13, function E) */
 
-#define BOARD_SERCOM3_MUXCONFIG  (USART_CTRLA_TXPAD0_2 | USART_CTRLA_RXPAD1)
+#define BOARD_SERCOM3_MUXCONFIG  (USART_CTRLA_TXPO_PAD0 | USART_CTRLA_RXPAD1)
 #define BOARD_SERCOM3_PINMAP_PAD0 PORT_SERCOM3_PAD0
 #define BOARD_SERCOM3_PINMAP_PAD1 PORT_SERCOM3_PAD1
 #define BOARD_SERCOM3_PINMAP_PAD2 0
@@ -388,7 +452,7 @@
 
 /* SERCOM5-7 defaults */
 
-#define BOARD_SERCOM5_MUXCONFIG  (USART_CTRLA_TXPAD0_2 | USART_CTRLA_RXPAD1)
+#define BOARD_SERCOM5_MUXCONFIG  (USART_CTRLA_TXPO_PAD0 | USART_CTRLA_RXPAD1)
 #define BOARD_SERCOM5_PINMAP_PAD0 0
 #define BOARD_SERCOM5_PINMAP_PAD1 0
 #define BOARD_SERCOM5_PINMAP_PAD2 0
@@ -399,7 +463,7 @@
 #define BOARD_SERCOM5_CORELOCK   FALSE
 #define BOARD_SERCOM5_FREQUENCY  BOARD_GCLK1_FREQUENCY
 
-#define BOARD_SERCOM6_MUXCONFIG  (USART_CTRLA_TXPAD0_2 | USART_CTRLA_RXPAD1)
+#define BOARD_SERCOM6_MUXCONFIG  (USART_CTRLA_TXPO_PAD0 | USART_CTRLA_RXPAD1)
 #define BOARD_SERCOM6_PINMAP_PAD0 0
 #define BOARD_SERCOM6_PINMAP_PAD1 0
 #define BOARD_SERCOM6_PINMAP_PAD2 0
@@ -410,7 +474,7 @@
 #define BOARD_SERCOM6_CORELOCK   FALSE
 #define BOARD_SERCOM6_FREQUENCY  BOARD_GCLK1_FREQUENCY
 
-#define BOARD_SERCOM7_MUXCONFIG  (USART_CTRLA_TXPAD0_2 | USART_CTRLA_RXPAD1)
+#define BOARD_SERCOM7_MUXCONFIG  (USART_CTRLA_TXPO_PAD0 | USART_CTRLA_RXPAD1)
 #define BOARD_SERCOM7_PINMAP_PAD0 0
 #define BOARD_SERCOM7_PINMAP_PAD1 0
 #define BOARD_SERCOM7_PINMAP_PAD2 0
