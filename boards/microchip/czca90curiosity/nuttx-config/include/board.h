@@ -4,36 +4,23 @@
  *
  * PIC32CZ CA90 Curiosity Ultra board configuration for PX4
  *
- * CHANGES vs previous version:
+ * HISTORY OF KEY FIXES:
  *
- *   FIX A (CRITICAL – no TX output):
- *     BOARD_SERCOM4_MUXCONFIG was (USART_CTRLA_TXPAD0_2 | USART_CTRLA_RXPAD1).
- *     USART_CTRLA_TXPAD0_2 = (2 << TXPO_SHIFT) → TXPO=2 which activates
- *     hardware CTS on SERCOM4_PAD3. With PAD3 unconnected and floating high,
- *     the USART hardware sees CTS deasserted and suppresses all TX. Changed
- *     to USART_CTRLA_TXPO_PAD0 (TXPO=0) which is TX-only on PAD0 (PC21)
- *     with no flow control. RX stays RXPO=1 (PAD1, PC22). Confirmed correct
- *     for the PKoB4 VCP connection on the Curiosity Ultra schematic.
+ *   FIX A (RESOLVED): Console was originally on SERCOM4 (PC21/PC22, EXT2 header).
+ *     Changed to SERCOM1 (PC04/PC07, PKoB4 VCP J700) matching Harmony ground truth.
+ *     SERCOM1 TXPO=0 (PAD0=PC04 TX), RXPO=3 (PAD3=PC07 RX) — no flow control.
+ *     SERCOM4 is now the EXT2 expansion connector only (non-console).
  *
- *   FIX B (CRITICAL – unstable UART clock during bringup):
- *     BOARD_SERCOM4_COREGEN was 1 (GCLK1 = DFLL48M, 48 MHz). In open-loop
- *     mode without USB connected the DFLL may be unstable at boot, producing
- *     wrong baud rates. Changed to GCLK5 (6 MHz, straight from verified
- *     XOSC0 crystal) for a rock-solid console clock at bringup. Baud error
- *     at 6 MHz / 115200 = 0.003%.  Re-point to GCLK1 once DFLL is proven.
- *     BOARD_SERCOM4_FREQUENCY updated to match (BOARD_GCLK5_FREQUENCY).
+ *   FIX B (RESOLVED): Clock was DFLL48M open-loop → GCLK1. Changed design:
+ *     PLL0 sourced from DFLL48M via sam_pll0_init(), GCLK1=PLL0_1/2=150 MHz.
+ *     SERCOM1 uses GCLK1 (150 MHz) → BAUD=64730 → 115200 baud. Matches Harmony.
  *
- *   FIX C (MODERATE – DFLL WAITLOCK in open-loop):
- *     BOARD_DFLL_WAITLOCK changed from TRUE to FALSE. In open-loop mode
- *     (BOARD_DFLL_MODE=FALSE) the CTRLB.WAITLOCK bit tells the hardware to
- *     hold the DFLL output until a stable lock condition – a condition that
- *     may never occur without the USB SOF reference. This would prevent
- *     GCLK1 from producing any clock at all, starving USB later on.
+ *   FIX C (RESOLVED): BOARD_DFLL_WAITLOCK set to FALSE. In open-loop mode
+ *     CTRLB.WAITLOCK=1 can hold the DFLL output clock until a condition that
+ *     may never occur without USB SOF. Kept FALSE to allow GCLK1 to run.
  *
- *   FIX D (COMMENT): XOSC0_FREQUENCY comment corrected to 12 MHz. The
- *     previous sam_clockconfig.c header mistakenly said "24 MHz". The define
- *     was always 12 MHz (DSC6011JI2B-012.0000). The GCLK5 DIV=2 and
- *     DPLL0 LDR=49 math remains unchanged (6 MHz × 50 = 300 MHz CPU).
+ *   FIX D (RESOLVED): stale XOSC0 "24 MHz" comment → 12 MHz. Sam_clockconfig.c
+ *     header also updated. XOSC0 is present on board but not used in SW.
  ****************************************************************************/
 
 #ifndef __BOARDS_MICROCHIP_CZCA90CURIOSITY_NUTTX_CONFIG_INCLUDE_BOARD_H
@@ -51,31 +38,35 @@
 
 /* Clocking *****************************************************************
  *
- * PIC32CZ CA90 Curiosity Ultra clock chain:
+ * PIC32CZ CA90 Curiosity Ultra clock chain (Harmony-verified, current):
  *
- *   XOSC0: Y300 = DSC6011JI2B-012.0000 = 12 MHz MEMS (XTALEN=0, ext clock)
+ *   DFLL48M (48 MHz, open-loop, running from reset — NOT configured in SW)
  *     |
- *   GCLK5 (÷2 = 6 MHz)  -- configured first (SET1), before DPLLs
- *     |-- GCLK_PCHCTRL[1] (DPLL0 reference)   ← FIX: was missing
- *     |-- SERCOM4 core clock (console UART)    ← FIX B
+ *   sam_pll0_init(): PLL0 REFSEL=DFLL, REFDIV=12, FBDIV=225, POSTDIV0=3
+ *     = 48/12=4 MHz × 225 = 900 MHz VCO / 3 = 300 MHz
  *     |
- *   DPLL0 (LDR=49, ×50 = 300 MHz)
+ *   GCLK0 (SRC=6=PLL0_1, DIV=1) → 300 MHz   [BOARD_GCLK0_FREQUENCY]
  *     |
- *   GCLK0 (÷1 = 300 MHz)  -- CPU clock
+ *   MCLK.CLKDIV[1]=2 (written permanently before GCLK0 switch, Harmony does same)
+ *     → CPU effective = 150 MHz  ← BOARD_CPU_FREQUENCY = 150 MHz (matches actual core speed)
  *     |
- *   MCLK CPUDIV=1 → CPU @ 300 MHz
+ *   GCLK1 (SRC=6=PLL0_1, DIV=2) → 150 MHz   [BOARD_GCLK1_FREQUENCY]
+ *     └─ SERCOM1 core clock (BOARD_SERCOM1_COREGEN=1) → BAUD=64730 → 115200 baud
  *
- *   DFLL48M (open loop, USB CRM) → 48 MHz → GCLK1 (for USB)
+ *   GCLK3 (SRC=3=OSCULP32K, DIV=1) → 32.768 kHz → SERCOM slow, WDT
+ *
+ *   XOSC0 (Y300, 12 MHz MEMS, XTALEN=0) is on the board but NOT used
+ *   (BOARD_HAVE_XOSC0=0).  GCLK5 is disabled.  BOARD_DPLL0_ENABLE=FALSE;
+ *   sam_pll0_init() initialises PLL0 directly via the Harmony sequence.
  */
 
 /* Oscillator frequencies */
 
 #define BOARD_XOSC0_FREQUENCY    12000000   /* 12 MHz – DSC6011JI2B-012.0000 */
-#define BOARD_XOSC1_FREQUENCY    0          /* XOSC1 not used */
 #define BOARD_XOSC32K_FREQUENCY  32768      /* 32.768 kHz (if present) */
 #define BOARD_OSC32K_FREQUENCY   32768      /* OSCULP32K nominal */
 #define BOARD_DFLL_FREQUENCY     48000000   /* DFLL48M output */
-#define BOARD_DPLL0_FREQUENCY    300000000  /* DPLL0 output: 6 MHz × 50 */
+#define BOARD_DPLL0_FREQUENCY    300000000  /* PLL0 output: DFLL/12 × 225/3 = 300 MHz */
 #define BOARD_DPLL1_FREQUENCY    0          /* DPLL1 not used */
 
 /* GCLK frequencies */
@@ -93,8 +84,12 @@
 #define BOARD_GCLK10_FREQUENCY   0
 #define BOARD_GCLK11_FREQUENCY   0
 
-#define BOARD_CPU_FREQUENCY      BOARD_GCLK0_FREQUENCY  /* 300 MHz */
-#define BOARD_MCK_FREQUENCY      BOARD_GCLK0_FREQUENCY  /* 300 MHz */
+/* CPU frequency = GCLK0 / MCLK.CLKDIV[1] = 300 MHz / 2 = 150 MHz.
+ * CLKDIV[1]=2 is written permanently by sam_pll0_init() (matches Harmony).
+ * Using 150 MHz here so NuttX SysTick calculates the correct tick interval. */
+
+#define BOARD_CPU_FREQUENCY      (BOARD_DPLL0_FREQUENCY / 2)  /* 150 MHz */
+#define BOARD_MCK_FREQUENCY      (BOARD_DPLL0_FREQUENCY / 2)  /* 150 MHz */
 
 /* XOSC32K - not used, rely on internal OSCULP32K */
 
@@ -125,19 +120,6 @@
 #define BOARD_XOSC0_CFDEN        FALSE
 #define BOARD_XOSC0_SWBEN        FALSE
 #define BOARD_XOSC0_STARTUP      0
-
-/* XOSC1 - not used */
-
-#define BOARD_HAVE_XOSC1         0
-#define BOARD_XOSC1_ENABLE       FALSE
-#define BOARD_XOSC1_XTALEN       FALSE
-#define BOARD_XOSC1_RUNSTDBY     FALSE
-#define BOARD_XOSC1_ONDEMAND     TRUE
-#define BOARD_XOSC1_LOWGAIN      FALSE
-#define BOARD_XOSC1_ENALC        FALSE
-#define BOARD_XOSC1_CFDEN        FALSE
-#define BOARD_XOSC1_SWBEN        FALSE
-#define BOARD_XOSC1_STARTUP      0
 
 /* GCLK configuration
  *
@@ -199,7 +181,10 @@
 #define BOARD_GCLK4_SOURCE       6         /* PLL0_1 = 300 MHz (CA90: 6 not 7) */
 #define BOARD_GCLK4_DIV          1
 
-/* GCLK5 - disabled (XOSC0 removed; SERCOM1 now uses GCLK1=DFLL48M) */
+/* GCLK5 - disabled. Was the XOSC0/2 reference for DPLL0 in an earlier design.
+ *         Current design uses sam_pll0_init() with PLL0 referencing DFLL directly
+ *         (REFSEL=2), so no GCLK is needed as PLL reference.  GCLK_PCHCTRL[1]
+ *         (PLL0 reference channel) is therefore never programmed either. */
 
 #define BOARD_GCLK5_ENABLE       FALSE
 #define BOARD_GCLK5_OOV          FALSE
@@ -279,14 +264,13 @@
 #define BOARD_DFLL_GCLK          3
 #define BOARD_DFLL_MUL           0
 
-/* DPLL0 - 300 MHz from GCLK5 (6 MHz × 50)
- *
- *   CTRLB.REFCLK = 0 → GCLK reference (routes through GCLK_PCHCTRL[1])
- *   DPLL0_GCLK   = 5 → GCLK5 feeds GCLK_PCHCTRL[1]
- *     (sam_clockconfig.c now calls sam_gclk_chan_enable() for this)
+/* DPLL0 fields — BOARD_DPLL0_ENABLE=FALSE so these values are unused.
+ *   PLL0 is initialised by sam_pll0_init() using DFLL48M directly (REFSEL=2).
+ *   BOARD_DPLL0_GCLK=5 / BOARD_DPLL0_LDRINT=49 are legacy from an earlier
+ *   design that routed XOSC0→GCLK5→PLL0 and are ignored at runtime.
  */
 
-#define BOARD_DPLL0_ENABLE       FALSE     /* sam_pll0_init() handles PLL0 directly */
+#define BOARD_DPLL0_ENABLE       FALSE     /* PLL0 init done by sam_pll0_init() */
 #define BOARD_DPLL0_DCOEN        FALSE
 #define BOARD_DPLL0_LBYPASS      FALSE
 #define BOARD_DPLL0_WUF          FALSE
@@ -322,20 +306,38 @@
 #define BOARD_DPLL1_LDRINT       0
 #define BOARD_DPLL1_DIV          0
 
-/* Master Clock (MCLK) */
+/* Master Clock (MCLK)
+ *
+ * BOARD_MCLK_CPUDIV=2 is written to MCLK.CLKDIV[1] before switching GCLK0 to
+ * PLL0 and is NEVER restored to 1.  Harmony plib_clock.c does the same.
+ * Effective CPU speed = GCLK0 (300 MHz) / CLKDIV[1] (2) = 150 MHz.
+ * BOARD_CPU_FREQUENCY is set to 150 MHz to match the actual core speed.
+ */
 
-#define BOARD_MCLK_CPUDIV        2         /* Harmony: MCLK.CLKDIV[1]=2 before PLL0 GCLK0 switch */
+#define BOARD_MCLK_CPUDIV        2         /* permanent: CPU = GCLK0/2 = 150 MHz */
 
 /* Flash wait states (FCR manages this automatically on CZCA90) */
 
 #define BOARD_FLASH_WAITSTATES   8
 
-/* LED definitions **********************************************************/
+/* LED definitions **********************************************************
+ *
+ * LED0: PB21, active LOW (yellow) — DS70005522C Table 2-11
+ * LED1: PB22, active LOW (yellow) — DS70005522C Table 2-11
+ *
+ * NuttX auto-LED state machine:
+ *   LED_STARTED/HEAPALLOCATE/IRQSENABLED = 0  → no change (LEDs off)
+ *   LED_STACKCREATED = 1                       → LED0 on  (system running)
+ *   LED_INIRQ/SIGNAL/ASSERTION = 2             → LED1 on  (activity)
+ *   LED_PANIC = 3                              → LED0+LED1 blink (fault)
+ */
 
-#define BOARD_LED0               0
-#define BOARD_NLEDS              1
+#define BOARD_LED0               0         /* PB21 */
+#define BOARD_LED1               1         /* PB22 */
+#define BOARD_NLEDS              2
 
 #define BOARD_LED0_BIT           (1 << BOARD_LED0)
+#define BOARD_LED1_BIT           (1 << BOARD_LED1)
 
 #define LED_STARTED              0
 #define LED_HEAPALLOCATE         0
@@ -347,11 +349,17 @@
 #define LED_PANIC                3
 #undef  LED_IDLE
 
-/* Button definitions *******************************************************/
+/* Button definitions *******************************************************
+ *
+ * SW0: PB24, active LOW (input with pullup) — DS70005522C Table 2-11
+ * SW1: PC23, active LOW (input with pullup) — DS70005522C Table 2-11
+ */
 
-#define BUTTON_SW0        0
-#define NUM_BUTTONS       1
+#define BUTTON_SW0        0         /* PB24 */
+#define BUTTON_SW1        1         /* PC23 */
+#define NUM_BUTTONS       2
 #define BUTTON_SW0_BIT    (1 << BUTTON_SW0)
+#define BUTTON_SW1_BIT    (1 << BUTTON_SW1)
 
 /* SERCOM configuration *****************************************************/
 

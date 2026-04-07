@@ -61,7 +61,23 @@
       "Bash(wsl.exe -e bash -c \"grep -rn ''usbdev_register'' /home/amzeo/px4_pic32czca90/platforms/nuttx/NuttX/nuttx/include/nuttx/usb/ --include=''*.h'' | head -5\")",
       "Bash(wsl.exe -e bash -c \"grep -rn ''usbdev_register'' /home/amzeo/px4_pic32czca90/platforms/nuttx/NuttX/nuttx/arch/arm/src/samv7/*.c | head -5\")",
       "Bash(wsl.exe -e bash -c \"grep -n ''NVIC_CLRENA_OFFSET\\\\|NVIC_ENA_OFFSET\\\\|define NVIC_IRQ_ENABLE\\\\|define NVIC_IRQ_CLEAR'' /home/amzeo/px4_pic32czca90/platforms/nuttx/NuttX/nuttx/arch/arm/src/armv7-m/nvic.h | head -10\")",
-      "Bash(wsl.exe -e bash -c \"grep -n ''NVIC_CLRENA_OFFSET\\\\|NVIC_ENA_OFFSET'' /home/amzeo/px4_pic32czca90/platforms/nuttx/NuttX/nuttx/arch/arm/src/samv7/sam_irq.c\")"
+      "Bash(wsl.exe -e bash -c \"grep -n ''NVIC_CLRENA_OFFSET\\\\|NVIC_ENA_OFFSET'' /home/amzeo/px4_pic32czca90/platforms/nuttx/NuttX/nuttx/arch/arm/src/samv7/sam_irq.c\")",
+      "Bash(mount)",
+      "Read(//tmp/**)",
+      "Bash(ls /mnt/c/Users/I74182/Downloads/*.pdf)",
+      "Bash(pdftotext -f 1 -l 100 \"PIC32CZ-CA80-CA90-Family-Data-Sheet-DS60001749.pdf\" -)",
+      "Bash(unzip -l czca90_src.zip)",
+      "Bash(pdftotext \"PIC32CZ-CA80-CA90-Family-Data-Sheet-DS60001749.pdf\" -)",
+      "Bash(unzip -q /home/amzeo/px4_pic32czca90/czca90_src.zip)",
+      "Bash(unzip -q czca90_src.zip -d /tmp/czca90_extract)",
+      "Bash(pdftotext \"PIC32CZ-CA80-CA90-Family-Data-Sheet-DS60001749.pdf\" /tmp/datasheet.txt)",
+      "Bash(pdftotext \"PIC32CZ-CA80-CA90-Curiosity-Ultra-User-Guide-DS70005522.pdf\" /tmp/userguide.txt)",
+      "Read(///wsl.localhost/Ubuntu/home/amzeo/px4_pic32czca90/boards/microchip/**)",
+      "Read(///wsl.localhost/Ubuntu/home/amzeo/px4_pic32czca90/platforms/nuttx/NuttX/nuttx/boards/arm/pic32czca90/**)",
+      "Read(///wsl.localhost/Ubuntu/home/amzeo/px4_pic32czca90/boards/microchip/czca90curiosity/**)",
+      "Read(///wsl.localhost/Ubuntu/home/amzeo/px4_pic32czca90/platforms/nuttx/NuttX/nuttx/boards/arm/pic32czca90/pic32czca90-curiosity/**)",
+      "Bash(wsl -d Ubuntu -- bash -c \"cd /home/amzeo/px4_pic32czca90 && make microchip_czca90curiosity_default 2>&1\")",
+      "Bash(wsl -d Ubuntu -- bash -c \"cd /home/amzeo/px4_pic32czca90 && make microchip_czca90curiosity_default 2>&1 | tail -20\")"
     ]
   }
 }

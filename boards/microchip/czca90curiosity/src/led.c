@@ -10,7 +10,8 @@
  * @file led.c
  *
  * LED backend for PIC32CZ CA90 Curiosity Ultra.
- * LED0 on PC21, active high.
+ * LED0 = PB21, active LOW (DS70005522C Table 2-11)  → GPIO_nLED_BLUE
+ * LED1 = PB22, active LOW (DS70005522C Table 2-11)  → GPIO_nLED_GREEN
  */
 
 #include <px4_platform_common/px4_config.h>
@@ -31,8 +32,9 @@ extern void led_off(int led);
 extern void led_toggle(int led);
 __END_DECLS
 
-static uint32_t g_ledmap[] = {
-	GPIO_nLED_BLUE,   /* Indexed by LED_BLUE (PC21) */
+static const uint32_t g_ledmap[] = {
+	GPIO_nLED_BLUE,    /* LED_BLUE  (0): PB21, armed/status  */
+	GPIO_nLED_GREEN,   /* LED_GREEN (1): PB22, activity/fault */
 };
 
 __EXPORT void led_init(void)
@@ -42,18 +44,19 @@ __EXPORT void led_init(void)
 	}
 }
 
-static void phy_set_led(int led, bool state)
+static void phy_set_led(int led, bool on)
 {
-	/* LED0 is active HIGH on Curiosity Ultra */
-	if (led == 0) {
-		sam_portwrite(g_ledmap[led], state);
+	/* Both LEDs are active LOW */
+	if ((unsigned)led < (sizeof(g_ledmap) / sizeof(g_ledmap[0]))) {
+		sam_portwrite(g_ledmap[led], !on);
 	}
 }
 
 static bool phy_get_led(int led)
 {
-	if (led == 0) {
-		return sam_portread(g_ledmap[led]);
+	if ((unsigned)led < (sizeof(g_ledmap) / sizeof(g_ledmap[0]))) {
+		/* active LOW: LOW output means LED is on */
+		return !sam_portread(g_ledmap[led]);
 	}
 
 	return false;

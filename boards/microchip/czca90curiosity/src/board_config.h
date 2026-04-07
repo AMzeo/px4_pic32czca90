@@ -29,9 +29,10 @@
  * Definitions
  ****************************************************************************************************/
 
-/* LED - PC21 (active high on Curiosity Ultra) */
+/* LEDs — DS70005522C Table 2-11, both active LOW (yellow) */
 
-#define GPIO_nLED_BLUE    PORT_LED0   /* PC21 */
+#define GPIO_nLED_BLUE    PORT_LED0   /* PB21, active LOW — armed/status */
+#define GPIO_nLED_GREEN   PORT_LED1   /* PB22, active LOW — activity/fault */
 
 #define BOARD_HAS_CONTROL_STATUS_LEDS      1
 #define BOARD_ARMED_STATE_LED  LED_BLUE
