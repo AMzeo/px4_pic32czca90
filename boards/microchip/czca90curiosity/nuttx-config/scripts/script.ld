@@ -32,19 +32,29 @@
  *
  ****************************************************************************/
 
-/* Linker script for PIC32CZ CA90 (Cortex-M7):
- *   - 8 MB Flash at 0x0C000000
- *   - 128 KB DTCM at 0x20000000 (tightly coupled, not used for heap)
+/* Linker script for PIC32CZ CA80/CA90 (Cortex-M7):
+ *   - 128 KB Boot Flash Memory (BFM) at 0x08000000 — vector table lives here
+ *   - 8 MB Program Flash Memory (PFM) at 0x0C000000 — code and rodata
+ *   - 128 KB DTCM at 0x20000000 (tightly coupled, kept disabled)
  *   - 896 KB SRAM at 0x20020000
+ *
+ * Boot sequence (verified from Harmony PIC32CZ8110CA80208.ld):
+ *   BootROM (0x04000000) reads SP from [0x08000000] (BFM[0])
+ *                        reads PC from [0x08000004] (BFM[1] → __start in PFM)
+ *   VTOR is set to 0x08000000 (BFM start) by BootROM, then re-affirmed in __start.
+ *   VECTOR_REGION = boot_rom (matches Harmony default when boot_rom region present).
  *
  * Memory layout (896 KB SRAM):
  *   sram    : 832 KB at 0x20020000 - 0x200EFFFF (heap + stack)
  *   nocache : 64 KB  at 0x200F0000 - 0x200FFFFF (DMA buffers, uncached)
+ *
+ * CA80 vs CA90: identical memory map; CA90 adds HSM (Hardware Security Module).
  */
 
 MEMORY
 {
-  flash (rx)    : ORIGIN = 0x0C000000, LENGTH = 8M
+  boot_rom (rx) : ORIGIN = 0x08000000, LENGTH = 128K  /* BFM — vector table */
+  flash (rx)    : ORIGIN = 0x0C000000, LENGTH = 8M    /* PFM — code          */
   sram (rwx)    : ORIGIN = 0x20020000, LENGTH = 832K
   nocache (rwx) : ORIGIN = 0x200F0000, LENGTH = 64K
 }
@@ -55,9 +65,15 @@ ENTRY(__start)
 
 SECTIONS
 {
+    /* Vector table: placed at BFM start (0x08000000).
+     * BootROM reads [BFM+0]=SP and [BFM+4]=PC (= __start in PFM) before jumping.
+     */
+    .vectors : {
+        KEEP(*(.vectors))
+    } > boot_rom
+
     .text : {
         _stext = ABSOLUTE(.);
-        *(.vectors)
         *(.text .text.*)
         *(.fixup)
         *(.gnu.warning)

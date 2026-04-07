@@ -1,61 +1,64 @@
 # PX4 Autopilot — PIC32CZ CA90 Port
 
-This branch contains PX4 Autopilot ported to the **Microchip PIC32CZ CA90 Curiosity** development board.
+This branch ports PX4 Autopilot to the **Microchip PIC32CZ CA90 Curiosity Ultra** development board (EV16W43A).
 
 ## Port Status
 
-| Component | Status |
-|-----------|--------|
-| PX4 Boot | ✅ Working |
-| NSH Shell | ✅ Working (UART1 / PKOB4 USB) |
-| QSPI Flash | ✅ Working (SST26VF032B 4MB) |
-| Parameter Storage | ✅ Working (/fs/mtd_params) |
-| Dataman | ✅ Working (/fs/mtd_waypoints) |
-| USB CDC-ACM | ✅ Working (TARGET USB) |
-| MAVLink | ✅ Working (/dev/ttyACM1) |
-| PWM Output | ✅ Working (4 channels, 400Hz) |
-| EKF2 | ✅ Working (HITL verified) |
-| HITL Simulation | ✅ Working (jMAVSim) |
-| SPI Bus | 🔄 Configured (sensors not connected yet) |
-| I2C Bus | 🔄 Configured (sensors not connected yet) |
-| ICM20689 IMU | ⬜ Not tested (real sensor) |
-| BMP388 Barometer | ⬜ Not tested (real sensor) |
-| RC Receiver | ⬜ Not connected yet |
-| DShot | ⬜ Not started |
-| CAN/UAVCAN | ⬜ Not started |
-
-## Quick Start
-
-See [QUICKSTART.md](QUICKSTART.md) for full clone, build, flash, and HITL setup instructions.
-
-## Build Stats
-
-| Region | Used | Total | Usage |
-|--------|------|-------|-------|
-| Flash | 1,352,048 B | 2 MB | 64.47% |
-| SRAM | 53,452 B | 448 KB | 11.65% |
-| nocache | 5 KB | 64 KB | 7.81% |
-
-## NuttX Submodule
-
-This port uses a forked NuttX with PIC32CZ CA90 support:
-- **Fork:** [Vigneshjr1/NuttX](https://github.com/Vigneshjr1/NuttX)
-- **Branch:** `pic32cz-ca70-port`
+| Component | Status | Notes |
+|-----------|--------|-------|
+| Build | Working | ~911 KB flash (10.9% of 8 MB) |
+| Clock tree | Working | PLL0 → 300 MHz, MCLK/2 → 150 MHz CPU, GCLK1 → 150 MHz SERCOM1 |
+| SERCOM1 console | Working | PC04/PC07, 115200 baud via PKOB4 J700 |
+| NSH shell | Working | Verified on hardware, full keyboard input |
+| LED driver | Working | PB21/PB22 active-LOW, verified on hardware |
+| DMA | Not started | |
+| I2C / SPI | Not started | |
+| USB CDC-ACM | Not started | |
+| TCC PWM | Not started | |
+| ADC | Not started | |
+| CAN-FD | Not started | |
 
 ## Hardware
 
-- **Board:** PIC32CZ CA90 Curiosity (144-pin)
-- **QSPI Flash:** SST26VF032B 4MB
-- **Console:** J700 PKOB4 USB → `/dev/ttyACM0` (115200 baud)
-- **MAVLink:** J200 TARGET USB → `/dev/ttyACM1`
+| Item | Value |
+|------|-------|
+| Board | PIC32CZ CA90 Curiosity Ultra (EV16W43A) |
+| MCU | PIC32CZ CA90 (Cortex-M7, 300 MHz) |
+| BFM (Boot Flash) | 128 KB at 0x08000000 |
+| PFM (Program Flash) | 8 MB at 0x0C000000 |
+| SRAM | 832 KB at 0x20020000 |
+| CA80 vs CA90 | Identical; CA90 adds HSM |
+
+## USB Connectors
+
+| Connector | Purpose | Linux device |
+|-----------|---------|--------------|
+| J700 — PKOB4 debug USB | NSH console (SERCOM1, 115200 baud) | `/dev/ttyACM0` |
+| J200 — Target USB | MAVLink CDC/ACM (when USB implemented) | `/dev/ttyACM1` |
+
+## Build & Flash
+
+See [QUICKSTART.md](QUICKSTART.md) for full instructions.
+
+```bash
+make microchip_czca90curiosity_default
+```
+
+## NuttX Submodule
+
+| Submodule | Repository | Branch |
+|-----------|-----------|--------|
+| `platforms/nuttx/NuttX/nuttx` | [AMzeo/nuttx](https://github.com/AMzeo/nuttx) | `pic32czca90-bringup` |
+| `platforms/nuttx/NuttX/apps` | [PX4/NuttX-apps](https://github.com/PX4/NuttX-apps) | `px4_firmware_nuttx-10.3.0+` |
 
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
-| [QUICKSTART.md](QUICKSTART.md) | Clone, build, flash and run |
-| [Port Status](docs/pic32czca90_px4_port_status.md) | Detailed port status and notes |
+| [QUICKSTART.md](QUICKSTART.md) | Build, flash, and connect |
+| [CLAUDE.md](CLAUDE.md) | Architecture, clock tree, bug history, pending tasks |
+| [docs/pic32czca90_port_status.md](docs/pic32czca90_port_status.md) | Detailed port status |
 
 ---
 
-*Branch: pic32cz-ca70-port*
+*Branch: pic32czca90-port*

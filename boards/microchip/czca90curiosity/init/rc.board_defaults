@@ -1,10 +1,11 @@
 #!/bin/sh
 # PIC32CZ CA90 Curiosity Ultra board defaults
 
-# MAVLink enabled on USB CDC/ACM (ttyACM0)
-# Default airframe: Generic Quad (4001)
-param set-default SYS_AUTOSTART 4001
-param set-default SYS_USB_AUTO -1
+# USB CDC/ACM driver not yet implemented — disable cdcacm_autostart.
+# NOTE: param set-default does NOT override the active in-memory value when
+# param import fails (no storage). param set forces the value for this session.
+param set-default SYS_AUTOSTART 0
+param set SYS_USB_AUTO -1
 param set-default USB_MAV_MODE 0
 param set-default MAV_0_CONFIG 101
 param set-default MAV_0_RATE 57600

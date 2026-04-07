@@ -2,5 +2,7 @@
 #
 # PIC32CZ CA90 Curiosity Ultra board extras
 #
+# navigator requires sensors/commander to be running; disabled until
+# sensor drivers are ported.
 
-navigator start
+echo "INFO: rc.board_extras - no extras for CA90 bringup"

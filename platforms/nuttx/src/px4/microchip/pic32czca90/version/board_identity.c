@@ -24,9 +24,15 @@
 
 static const uint16_t soc_arch_id = PX4_SOC_ARCH_ID;
 
-/* PIC32CZ CA90 serial number location (DSU Device Identification) */
-#define CA90_SERIAL_BASE    0x41002018  /* DSU DID register */
+/* TODO: Replace with real NVM serial row once MCLK_ID_APB_DSU is defined and
+ * the CA90 serial number address is confirmed from the DFP.  Until then, fixed
+ * dummy words are used; all boards will report the same GUID. */
 #define CA90_SERIAL_WORDS   3
+
+/* Dummy serial words (stub) */
+static const uint32_t ca90_dummy_serial[CA90_SERIAL_WORDS] = {
+	0xCA900001u, 0xCA900002u, 0xCA900003u
+};
 
 typedef const uint8_t uuid_uint8_reorder_t[PX4_CPU_UUID_BYTE_LENGTH];
 
@@ -47,13 +53,11 @@ void board_get_uuid(uuid_byte_t uuid_bytes)
 
 __EXPORT void board_get_uuid32(uuid_uint32_t uuid_words)
 {
-	volatile uint32_t *serial = (volatile uint32_t *)CA90_SERIAL_BASE;
-
 	for (unsigned i = 0; i < PX4_CPU_UUID_WORD32_LENGTH; i++) {
 		if (i < CA90_SERIAL_WORDS) {
-			uuid_words[i] = serial[i];
+			uuid_words[i] = ca90_dummy_serial[i];
 		} else {
-			uuid_words[i] = serial[i % CA90_SERIAL_WORDS] ^ (i << 24);
+			uuid_words[i] = ca90_dummy_serial[i % CA90_SERIAL_WORDS] ^ (i << 24);
 		}
 	}
 }
@@ -81,16 +85,15 @@ int board_get_uuid32_formated(char *format_buffer, int size,
 
 int board_get_mfguid(mfguid_t mfgid)
 {
-	volatile uint32_t *serial = (volatile uint32_t *)CA90_SERIAL_BASE;
 	uint8_t *rv = &mfgid[0];
 
 	for (unsigned i = 0; i < PX4_CPU_UUID_WORD32_LENGTH; i++) {
 		uint32_t uuid_val;
 
 		if (i < CA90_SERIAL_WORDS) {
-			uuid_val = serial[i];
+			uuid_val = ca90_dummy_serial[i];
 		} else {
-			uuid_val = serial[i % CA90_SERIAL_WORDS] ^ (i << 24);
+			uuid_val = ca90_dummy_serial[i % CA90_SERIAL_WORDS] ^ (i << 24);
 		}
 
 		uint32_t uuid_bytes = SWAP_UINT32(uuid_val);
@@ -125,15 +128,13 @@ int board_get_px4_guid(px4_guid_t px4_guid)
 		*pb++ = 0;
 	}
 
-	volatile uint32_t *serial = (volatile uint32_t *)CA90_SERIAL_BASE;
-
 	for (unsigned i = 0; i < PX4_CPU_UUID_WORD32_LENGTH; i++) {
 		uint32_t uuid_val;
 
 		if (i < CA90_SERIAL_WORDS) {
-			uuid_val = serial[i];
+			uuid_val = ca90_dummy_serial[i];
 		} else {
-			uuid_val = serial[i % CA90_SERIAL_WORDS] ^ (i << 24);
+			uuid_val = ca90_dummy_serial[i % CA90_SERIAL_WORDS] ^ (i << 24);
 		}
 
 		uint32_t uuid_bytes = SWAP_UINT32(uuid_val);

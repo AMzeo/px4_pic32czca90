@@ -13,39 +13,19 @@
 
 #include <px4_platform_common/px4_config.h>
 #include <px4_platform_common/defines.h>
-#include <nuttx/arch.h>
-#include "arm_internal.h"
 
-/* PIC32CZ CA90 DSU DID register */
-#define CA90_DSU_DID    0x41002018
+/* TODO: Enable DSU APB clock (MCLK_ID_APB_DSU, not yet defined) before
+ * reading CA90_DSU_DID.  Until then return a fixed stub to avoid bus stall. */
+#define CA90_DSU_DID    0x44000120
 
 /* Extract fields from DID */
-#define DID_PROCESSOR(x)    (((x) >> 28) & 0xF)
-#define DID_FAMILY(x)       (((x) >> 23) & 0x1F)
-#define DID_SERIES(x)       (((x) >> 16) & 0x3F)
-#define DID_DEVSEL(x)       ((x) & 0xFF)
 #define DID_REVISION(x)     (((x) >> 8) & 0xF)
 
 int board_mcu_version(char *rev, const char **revstr, const char **errata)
 {
-	uint32_t did = getreg32(CA90_DSU_DID);
-	uint32_t revision = DID_REVISION(did);
-
+	/* Stub: return fixed values until DSU clock is enabled */
 	*revstr = "PIC32CZCA90";
-
-	switch (revision) {
-	case 0:
-		*rev = 'A';
-		break;
-
-	case 1:
-		*rev = 'B';
-		break;
-
-	default:
-		*rev = '?';
-		break;
-	}
+	*rev = 'A';
 
 	if (errata) {
 		*errata = NULL;

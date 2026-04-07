@@ -44,8 +44,8 @@ set PARAM_DEFAULTS_VER 1
 
 #
 # Print full system version.
-#
-ver all
+# NOTE: ver all removed from rcS — run interactively: nsh> ver all
+# (ver all works correctly but task timing during boot can stall sensors/commander)
 
 # RE-ENABLED: MAVLink now works with USB CDC/ACM
 # mavlink stop-all >/dev/null 2>&1
