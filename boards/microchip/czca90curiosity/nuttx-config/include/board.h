@@ -61,10 +61,17 @@
 #define BOARD_GCLK10_FREQUENCY   0
 #define BOARD_GCLK11_FREQUENCY   0
 
-/* CPU frequency = GCLK0 / MCLK.CLKDIV[1] = 300 MHz / 2 = 150 MHz */
+/* CPU frequency = GCLK0 = 300 MHz.
+ * MCLK.CLKDIV[1] (offset 0x0010, DFP-verified stride ×4) is PAC write-protected.
+ * sam_clockconfig.c writes CPUDIV=2 but PAC silently drops it; CPUDIV stays at
+ * reset default 1 (no division).  CPU = GCLK0 = PLL0 = 300 MHz.
+ * BOARD_MCLK_CPUDIV=2 is kept so sam_clockconfig executes the write+CKRDY read
+ * (providing a clock-domain synchronization barrier before the GCLK0 switch);
+ * the write itself has no hardware effect.
+ */
 
-#define BOARD_CPU_FREQUENCY      (BOARD_DPLL0_FREQUENCY / 2)  /* 150 MHz */
-#define BOARD_MCK_FREQUENCY      (BOARD_DPLL0_FREQUENCY / 2)  /* 150 MHz */
+#define BOARD_CPU_FREQUENCY      BOARD_DPLL0_FREQUENCY         /* 300 MHz */
+#define BOARD_MCK_FREQUENCY      BOARD_DPLL0_FREQUENCY         /* 300 MHz */
 
 /* XOSC32K - not used, rely on internal OSCULP32K */
 
@@ -279,11 +286,15 @@
 
 /* Master Clock (MCLK)
  *
- * BOARD_MCLK_CPUDIV=2 is written to MCLK.CLKDIV[1] before switching GCLK0 to
- * PLL0 and kept permanently.  Effective CPU speed = GCLK0 / 2 = 150 MHz.
+ * MCLK.CLKDIV[0] (offset 0x000C, DFP: MCLK_CLKDIV0_REG_OFST) = CPU Clock Divider.
+ * Cross-test confirmed: CLKDIV[0]=1 → CPU = GCLK0 = 300 MHz (no division).
+ * CLKDIV[1] (offset 0x0010) is a separate domain divider — NOT the CPU divider.
+ * Harmony GCLK0_Initialize sets CLKDIV[1]=2; sam_clockconfig follows suit.
+ * BOARD_MCLK_CPUDIV=1 → sam_clockconfig writes 1 to CLKDIV[0] (idempotent,
+ * already at reset default) and the CKRDY read provides the clock-domain barrier.
  */
 
-#define BOARD_MCLK_CPUDIV        2         /* permanent: CPU = GCLK0/2 = 150 MHz */
+#define BOARD_MCLK_CPUDIV        1         /* CLKDIV[0]=1: CPU = GCLK0 = 300 MHz */
 
 /* Flash wait states (FCR manages this automatically on CZCA90) */
 

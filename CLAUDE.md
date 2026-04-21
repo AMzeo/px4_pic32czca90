@@ -2,6 +2,71 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## NSH Command Registration — Rules (read before adding any new command)
+
+There are exactly **two mechanisms** for making a command available in NSH. Confusing them is the most common "command not found" mistake in this repo.
+
+### Mechanism A — Board-local test/utility commands
+
+Place `px4_add_module` directly in `boards/microchip/czca90curiosity/src/CMakeLists.txt`.
+No entry in `default.px4board` is needed.
+
+```cmake
+# boards/microchip/czca90curiosity/src/CMakeLists.txt
+px4_add_module(
+    MODULE board_hrt_test
+    MAIN hrt_test          # becomes the NSH command name
+    SRCS
+        hrt_test.c
+)
+```
+
+The PX4 build system automatically:
+1. Compiles the module into a static library.
+2. Writes an entry into `platforms/nuttx/NuttX/apps/builtin/registry/px4.bdat` and `px4.pdat`.
+3. NuttX make regenerates `builtin_list.h` / `builtin_proto.h` from the registry.
+4. `g_builtins[]` in the final ELF contains the command name → function pointer.
+
+**Rule:** Any `px4_add_module` in the board CMakeLists.txt is unconditionally included for that board. You do NOT need `CONFIG_BOARD_*=y` in `default.px4board` for board-local commands.
+
+### Mechanism B — Shared PX4 modules (systemcmds, drivers, flight stack)
+
+These live in `src/modules/`, `src/systemcmds/`, `src/drivers/` and have a `Kconfig` file.
+They are **only built and linked when** the corresponding `CONFIG_*=y` line exists in `default.px4board`.
+
+```
+# default.px4board
+CONFIG_SYSTEMCMDS_PERF=y       # enables perf command
+CONFIG_MODULES_COMMANDER=y     # enables commander
+CONFIG_MODULES_SENSORS=y       # enables sensors
+```
+
+Without the `CONFIG_*=y` entry the module library is never compiled, never registered,
+and the command is not in the ELF.
+
+### Verification (before flashing)
+
+Always verify a new command is in the ELF before flashing:
+
+```bash
+# Must print the command name — if empty, it is not registered
+arm-none-eabi-strings build/microchip_czca90curiosity_default/microchip_czca90curiosity_default.elf   | grep "^hrt_test$"
+
+# Must show a valid flash address (0c......)
+arm-none-eabi-nm build/microchip_czca90curiosity_default/microchip_czca90curiosity_default.elf   | grep hrt_test_main
+```
+
+### "command not found" diagnosis checklist
+
+1. **Is it in the ELF?** Run the `strings` + `nm` checks above on the **latest build**.
+2. **Was the board reflashed after the last build?** The running image is the previous flash — not the latest build.
+3. **Is it a shared module missing from `default.px4board`?** Add `CONFIG_*=y`.
+4. **Is it a board-local module missing from board CMakeLists.txt?** Add `px4_add_module`.
+
+**The most common cause of "command not found": board has not been reflashed after the new module was added.**
+
+---
+
 ## Build Commands
 
 ```bash
@@ -116,24 +181,41 @@ DFLL48M (48 MHz, enabled at reset, not configured in software)
   └── PLL0 (REFSEL=DFLL, REFDIV=12, FBDIV=225, POSTDIV=3)
         = 48 MHz / 12 = 4 MHz ref → × 225 = 900 MHz VCO → / 3 = 300 MHz
         |
-        ├── GCLK0 (SRC=6=PLL0_1, DIV=1) → 300 MHz
-        │     └── MCLK.CLKDIV[1]=2  →  150 MHz  →  CPU
-        └── GCLK1 (SRC=6=PLL0_1, DIV=2) → 150 MHz → SERCOM1 core clock
-              └── SERCOM1 BAUD=64730 → 115200 baud
+        ├── GCLK0 (SRC=6=PLL0_1, DIV=0→1) → 300 MHz → CPU
+        │     MCLK.CLKDIV[0] = 1 (CPU divider, no division) → CPU = 300 MHz
+        │     MCLK.CLKDIV[1] = 2 (second domain divider, matches Harmony; NOT CPU)
+        │
+        └── GCLK1 (SRC=6=PLL0_1, DIVSEL=1, DIV=0 → /2) → 150 MHz
+              ├── SERCOM1 (console UART): BAUD=64730 → 115200 baud
+              └── TCC0 (HRT): 6.67 ns/tick, 32-bit free-run, wraps ~28.6 s
 
 OSCULP32K → GCLK3 (SRC=3, DIV=1) → 32.768 kHz → SERCOM slow clock
 ```
+
+**Peripheral frequencies (hardware verified):**
+
+| Peripheral | Clock | Frequency | Notes |
+|-----------|-------|-----------|-------|
+| CPU (Cortex-M7) | GCLK0 / CLKDIV[0]=1 | **300 MHz** | cross-test confirmed |
+| SERCOM1 (console UART) | GCLK1 | **150 MHz** | BAUD=64730 → 115200 baud |
+| TCC0 (HRT) | GCLK1 | **150 MHz** | 6.67 ns/tick, 64-bit µs via software |
+| SysTick | CPU | **100 Hz** | RELOAD=2,999,999; CLK_TCK=100 Hz |
+| GCLK3 (slow clock) | OSCULP32K | **32.768 kHz** | SERCOM slow, WDT |
 
 **Key clock facts:**
 - DFLL48M is not configured in software — it is already running from hardware reset
 - XOSC0 (MEMS oscillator) is not used — PLL0 references DFLL directly
 - `sam_dfll_configure()` must NOT be called — CA90 has no DFLLSYNC register
-- MCLK.CLKDIV[1]=2 is written before switching GCLK0 to PLL0 and kept permanently;
-  effective CPU speed = 150 MHz (`BOARD_CPU_FREQUENCY = DPLL0_FREQUENCY / 2`)
-- **300 MHz operation:** restoring CLKDIV[1]=1 after the GCLK switch causes a system
-  hang (board completely dead). Root cause unknown — likely requires FCR explicit
-  configuration or executing the divider-restore from SRAM to avoid instruction-fetch
-  issues during the CPU clock step. Left at 150 MHz until resolved.
+- **MCLK.CLKDIV[0]** (offset 0x0C) = CPU Clock Divider. Reset default = 1 (no division → CPU = 300 MHz).
+  **READ-ONLY** — PAC write-protected. Writing causes BusFault during boot. `SAM_MCLK_CPUDIV` is
+  intentionally NOT defined in `sam_mclk.h` to prevent accidental writes.
+  `BOARD_CPU_FREQUENCY = BOARD_DPLL0_FREQUENCY = 300 MHz`
+- **MCLK.CLKDIV[1]** (DFP offset 0x10) — Harmony GCLK0_Initialize writes 2 here then polls CKRDY.
+  The CKRDY poll is the clock-domain barrier before switching GCLK0 source to PLL0; skipping it
+  causes early boot hang. DS70005522C §21.6 claims CLKDIV1 is at 0x14 — **hardware-confirmed wrong**:
+  reading 0x44052014 causes a bus stall. DFP stride-4 layout (0x10) matches hardware.
+- GCLK1 uses DIVSEL=1 (power-of-two) mode: raw GENCTRL=0x00001106, DIV=0 →
+  output = 300 MHz / 2^(0+1) = 150 MHz. TCC0/SERCOM1 are unaffected by MCLK.
 
 ### Console UART (SERCOM1)
 
@@ -192,17 +274,28 @@ When any clock frequency, GCLK source, SERCOM pin, or baud rate changes — upda
 | sam_dfll_configure DFLLSYNC refs | `sam_clockconfig.c` | Build error after DFLLSYNC removed | Replaced with OSCCTRL_SYNCBUSY_* (SYNCBUSY is the CA90 register) |
 | LED active polarity wrong | `led.c`, `pic32czca90_autoleds.c`, `pic32czca90_userleds.c` | LED on when should be off, vice versa | Inverted polarity: LED0/1 are active LOW (PB21/PB22, DS70005522C) |
 | LED initial state undefined | `pic32czca90_pinmap.h`, `sam_port.c` | LED glitch on init (could start lit) | Added PORT_FLAG_OUTVAL_HIGH; sam_portconfig sets OUTSET before DIRSET (Harmony sequence) |
-| BOARD_CPU_FREQUENCY set to wrong value | `board.h` (both) | SysTick wrong frequency | `BOARD_CPU_FREQUENCY` = `BOARD_DPLL0_FREQUENCY / 2` = 150 MHz (MCLK.CLKDIV[1]=2 permanent); restoring CLKDIV[1]=1 at runtime causes system hang — 300 MHz deferred |
+| BOARD_CPU_FREQUENCY set to wrong value | `board.h` (both), `sam_mclk.h` | SysTick fired at 200 Hz instead of 100 Hz; `hrt_test cross` showed -50% skew | Root cause: `BOARD_CPU_FREQUENCY=150 MHz` made `SYSTICK_RELOAD=1,499,999`; actual CPU=300 MHz → SysTick at 200 Hz (2× fast). Fix: set `BOARD_CPU_FREQUENCY = BOARD_DPLL0_FREQUENCY = 300 MHz`. Also found: `SAM_MCLK_CPUDIV` was aliased to `CLKDIV[1]` (offset 0x10) — NOT the CPU divider. CPU divider is `CLKDIV[0]` (offset 0x0C), always at reset default 1 → CPU = 300 MHz. `SAM_MCLK_CPUDIV` removed entirely to prevent accidental writes to PAC-protected register. |
+| MCLK CLKDIV[0] write causes BusFault on boot | `sam_mclk.h`, `sam_clockconfig.c` | Writing to 0x4405200C (CLKDIV[0]) during `sam_clock_configure()` caused BusFault before UART init — board appeared completely dead | CLKDIV[0] is PAC write-protected (hardware confirmed). CPU divider stays at reset default 1 = 300 MHz. Fix: removed `SAM_MCLK_CPUDIV` define; `sam_clockconfig` only writes `SAM_MCLK_CLKDIV1` (0x10) and polls CKRDY — matching Harmony `GCLK0_Initialize` exactly. |
+| DS70005522C §21.6 CLKDIV1 offset incorrect | `sam_mclk.h` | Reading 0x44052014 (DS-claimed CLKDIV1 offset) causes CPU bus stall — board hangs | Hardware-confirmed: 0x44052014 is not accessible on CA90 (bus stall, no response). DFP stride-4 array places CLKDIV[1] at 0x10 — matches hardware. DS §21.6 register map is wrong at this offset. DO NOT access 0x44052014. |
 | VTOR not set explicitly | `sam_start.c` | Early HardFault routed to BootROM vectors | Added explicit NVIC_VECTAB write first in `__start()` |
 | chip.h ITCM_SIZE wrong | `arch/arm/include/pic32czca90/chip.h` | 64 KB reported but CA90 has 128 KB ITCM | Changed to `128*1024` |
 | `.vectors` placed at PFM (0x0C000000) | `script.ld`, `linker.ld` | No console output after programming — BootROM reads SP/PC from BFM (0x08000000) which was unprogrammed (0xFF) | Added `boot_rom` region at 0x08000000; `.vectors` → `boot_rom`, `.text` → `flash` (VECTOR_REGION=boot_rom convention) |
-| arm_vectors.c SysTick/PendSV to `my_hardfault` | `arch/arm/src/armv7-m/arm_vectors.c` | ABDE appears but NuttX hangs immediately — first SysTick tick hits infinite loop before scheduler starts | Routes [11] SVC, [14] PendSV, [15] SysTick → `exception_common`; only true faults [2..10,12..13] use `my_hardfault` |
+| `my_hardfault` silent loop in vector table | `arch/arm/src/armv7-m/arm_vectors.c` | NMI [2], reserved [7..10], DebugMon [12..13] silently looped — any unexpected exception froze the system with zero output | Removed `my_hardfault`; all vectors now route to `exception_common`, which dispatches to registered PANIC handlers |
+| SysTick direct cast to `nxsched_process_timer` | `arch/arm/src/pic32czca90/sam_timerisr.c` | `(xcpt_t)nxsched_process_timer` signature mismatch (void vs int return) — undefined behavior in practice | Added proper `static int sam_timerisr(int irq, FAR uint32_t *regs, FAR void *arg)` wrapper |
+| Missing NVIC debug handlers | `arch/arm/src/pic32czca90/sam_irq.c` | Unexpected NMI/BusFault/UsageFault/PendSV/DebugMon produced no output even with `CONFIG_DEBUG_FEATURES=y` | Added `sam_nmi`, `sam_busfault`, `sam_usagefault`, `sam_pendsv`, `sam_dbgmonitor`, `sam_reserved` handlers (SAMV7 pattern) — each calls `PANIC()` with diagnostic message |
+| NVIC init used static count instead of NVIC_ICTR | `arch/arm/src/pic32czca90/sam_irq.c` | Priority register count `(SAM_IRQ_NEXTINT+3)/4` correct but brittle | Switched to `nintlines = (NVIC_ICTR & INTLINESNUM_MASK) + 1`; loops use NVIC_ICTR-derived count following SAMV7 pattern |
+| NVIC_VECTAB not written in `up_irqinitialize` | `arch/arm/src/pic32czca90/sam_irq.c` | Vector table address confirmed only in `__start`; `up_irqinitialize` didn't re-affirm it | Added `putreg32((uint32_t)_vectors, NVIC_VECTAB)` following SAMV7 pattern |
+| USART CTRLA missing IBON bit | `arch/arm/src/pic32czca90/sam_lowputc.c` | Immediate Buffer Overflow Notification disabled; BUFOVF detected late. Harmony example sets IBON | Added `USART_CTRLA_IBON` to ctrla initialization in `sam_usart_configure()` |
 | IRQ table SAMD5x-derived (137 IRQs) | `arch/arm/include/pic32czca90/pic32czca90_irq.h` | SERCOM1 DRE at wrong offset (50 vs 64); interrupt-driven drivers would bind wrong vectors | Complete rewrite from Harmony `device_vectors.h` (PIC32CZ8110CA80208 DFP): 222 IRQs, SERCOM0-9 ×7 each, TCC0-9, CAN0-5 |
 | chip.h peripheral counts SAMD5x-derived | `arch/arm/include/pic32czca90/chip.h` | NSERCOM=8, NTC=8, NTCC=5, NCAN=2 — all wrong for CA90 | Updated to NSERCOM=10, NTC=0 (CA90 has no TC, only TCC), NTCC=10, NCAN=6 |
 | DSU DID address wrong (SAMD5x value) | `board_mcu_version.c`, `board_identity.c` | `ver mcu` / `ver px4guid` / `ver all` hang → Hard Fault (unmapped read at 0x41002018) | CA90 DSU at 0x44000000 (APB A), DID offset = 0x0120 (DFP-verified) → `CA90_DSU_DID = 0x44000120` |
 | DSU reads cause CPU bus stall | `board_mcu_version.c`, `board_identity.c` | `ver mcu`, `ver px4guid`, `ver all` hang system completely — CPU stalls waiting for AHB response | DSU APB clock not enabled (MCLK_ID_APB_DSU missing from sam_mclk.h); bus stall on clock-gated peripheral. Stubbed with fixed return values until DSU MCLK ID is known and clock is enabled |
 | rcS `ver all` in startup script blocked NSH | `ROMFS/px4fmu_common/init.d/rcS` | System printed 3 lines of ver output then hung — remaining lines in TX buffer couldn't drain because CPU was stalled at DSU access | Removed `ver all` from rcS; DSU stall also fixed by stubbing board_identity/mcu_version |
 | `param set-default` doesn't set active in-memory value | `rc.board_defaults` | `cdcacm_autostart` runs despite `SYS_USB_AUTO -1` set via `set-default`; ~5 s after boot idle: "Device /dev/ttyACM0 does not exist" spam, system appears stuck | `param set-default` only updates stored default — when param import fails (no storage), in-memory value stays at compiled-in default. Changed to `param set SYS_USB_AUTO -1` |
+| LED1 heartbeat never fired | `boards/microchip/czca90curiosity/src/init.c` | LED1 stayed off — heartbeat was wired into `pic32czca90_bringup()` (NuttX board layer) which is never called in a PX4 build; PX4 `board_app_initialize` in `init.c` overrides it | Moved heartbeat `work_queue(LPWORK, ...)` into PX4 `board_app_initialize` in `init.c` |
+| Wrong GCLK channel IDs for TCC and CAN | `hardware/sam_gclk.h` | TCC GCLK channels (31-40) were SAMD5x-derived shared groups; CAN channels placed at 31-36 (wrong). Would route TCC0 to wrong GCLK channel, breaking HRT and any TCC peripheral | CA90 DFP: each TCC has individual channel — TCC0=31…TCC9=40; CAN0=46…CAN5=51; GMAC=52 (verified from Harmony plib_clock.c + DFP instance/tcc0.h, instance/can0.h) |
+| Missing TCC MCLK APB clock IDs | `hardware/sam_mclk.h` | `MCLK_ID_APB_TCC0` through `MCLK_ID_APB_TCC9` not defined (41-50) — hrt_init() would fail to enable TCC0 APB clock, leaving TCC0 registers inaccessible | Added all 10 TCC MCLK IDs (41-50) after SERCOM9 definition |
+| HRT callouts never fired — all PX4 tasks stall | `platforms/nuttx/src/px4/microchip/pic32czca90/hrt/hrt.c` | `hrt_call_every()` queued work items that sat in queue forever; all PX4 `ScheduledWorkItem` modules (commander, sensors, nav) never executed their periodic work; `ps` showed every task `Waiting` | Complete rewrite: TCC0 free-running at 150 MHz (GCLK1, DIV1), CC[0] compare match ISR fires `hrt_call_invoke()` at each deadline, `hrt_reschedule()` programs next CC[0]; READSYNC protocol for COUNT reads (Harmony-verified) |
 
 ### NuttX Integration
 
@@ -316,80 +409,135 @@ Three files that NuttX core includes everywhere — critical to get right:
 - Clock tree: PLL0→300 MHz, GCLK1→150 MHz, GCLK3→32 kHz — matches Harmony ✓
 - SERCOM1 pin mux (PC04/PC07, func D) and baud rate (BAUD=64730→115200) match Harmony ✓
 - LED0/LED1 active-LOW on PB21/PB22, initial state HIGH (LED off) — matches Harmony plib_port.c ✓
-- BOARD_CPU_FREQUENCY = 150 MHz (MCLK.CLKDIV[1]=2 kept permanently; 300 MHz hangs — see Clock Tree) ✓
+- BOARD_CPU_FREQUENCY = 300 MHz; CPU = GCLK0 / CLKDIV[0]=1 = 300 MHz. CLKDIV[0] (0x0C) is CPU divider (PAC-protected, never written). CLKDIV[1] at 0x10 (DFP stride-4) written by Harmony for CKRDY barrier; 0x14 (DS-claimed CLKDIV1) causes bus stall — DS map is wrong. Cross-test verified: <0.3% skew ✓
 - I-cache and D-cache enabled (CONFIG_ARMV7M_ICACHE/DCACHE=y) ✓
 - MPU enabled (CONFIG_ARM_MPU=y, 16 regions) ✓
 - chip.h ITCM_SIZE corrected to 128 KB ✓
 - chip.h peripheral counts corrected: NSERCOM=10, NTC=0, NTCC=10, NCAN=6 ✓
 - Register headers (sam_oscctrl.h, sam_mclk.h, sam_gclk.h) verified vs DFP ✓
-- arm_vectors.c: SysTick [15] and PendSV [14] route through `exception_common` ✓
+- arm_vectors.c: all 16 system vectors → `exception_common`; `my_hardfault` removed ✓
 - pic32czca90_irq.h: 222 IRQs from Harmony device_vectors.h (was SAMD5x 137) ✓
 - NSH console alive, nx_start() reached ✓
 - NSH interactive prompt (`nsh>`) verified on hardware; full keyboard input working ✓
+- NSH stable under sustained operation (15+ min, all commands tested) ✓
 - `cdcacm_autostart` suppressed via `param set SYS_USB_AUTO -1` (USB driver not yet implemented) ✓
+- `my_hardfault` silent loop removed; all vectors → `exception_common` (NMI/BusFault/UsageFault/PendSV/DebugMon now produce PANIC output) ✓
+- `sam_timerisr` proper wrapper added (replaces `(xcpt_t)nxsched_process_timer` direct cast) ✓
+- NVIC debug handlers added in `sam_irq.c` under `CONFIG_DEBUG_FEATURES` (SAMV7 pattern) ✓
+- NVIC_ICTR-based disable/priority loops in `up_irqinitialize` (SAMV7 pattern) ✓
+- NVIC_VECTAB re-affirmed in `up_irqinitialize` ✓
+- USART CTRLA IBON bit set in `sam_usart_configure()` (matches Harmony plib_sercom1_usart.c) ✓
+- LED0 steady on after boot; LED1 blinks at 1 Hz via LPWORK heartbeat in `init.c`; LED1 frozen = scheduler stalled ✓
+- `hardware/sam_tcc.h` added: TCC register definitions (CTRLA, CTRLBSET, SYNCBUSY, INTENCLR, INTENSET, INTFLAG, COUNT, WAVE, PER, CC[n]); all bit positions DFP-verified; TCC0 GCLK_ID=31, MCLK_ID_APB_TCC0=41 ✓
+- `sam_gclk.h` TCC/CAN channel IDs corrected to DFP values: TCC0-9 = channels 31-40 (individual, not shared); CAN0-5 = 46-51; GMAC=52 ✓
+- `sam_mclk.h` TCC MCLK APB IDs added: MCLK_ID_APB_TCC0=41 through MCLK_ID_APB_TCC9=50 ✓
+- HRT (hrt.c) rewritten: TCC0 free-running 32-bit counter at GCLK1=150 MHz; CC[0] compare match ISR drives `hrt_call_invoke()`; READSYNC protocol for COUNT reads; 64-bit time extension via `g_base_time_us`; `hrt_reschedule()` programs next deadline; all PX4 `ScheduledWorkItem` periodic tasks now fire ✓
 
 **Pending — by priority for a flying PX4 system:**
 
-#### P1 — DMA (prerequisite for high-bandwidth I2C/SPI/USB)
-1. Add missing register header `hardware/sam_dmac.h` (DMAC base, channel regs, descriptor layout)
-2. Implement `sam_dmac.c` — 32-channel DMA driver (port from samd5e5/sam_dmac.c, update regs)
-3. Configure MPU nocache region for DMA descriptors (linker already has 64 KB at 0x200F0000)
+> **Storage:** No internal PFM for params or caldata. SD card → flight logs (`/fs/microsd`).
+> SQI1 (SST26VF032BAT, 4 MB) → params/caldata/dataman (`/fs/mtd_params`, `/fs/mtd_caldata`,
+> `/fs/mtd_waypoints`). See `docs/sqi_filesystem.md` for the full MTD stack implementation guide.
+>
+> **DFP peripheral names (CA90 — do not use SAMD5x names):**
+> - SD/MMC controller → `SDMMC` (`component/sdmmc.h`) — not "SDHC" or "HSMCI"
+> - System DMA → `DMA` (`component/dma.h`) — not "DMAC"
+> - SQI flash → `SQI` (`component/sqi.h`) — has integrated BD-DMA; does **not** use system DMA
+> - USB → `USBHS` (`component/usbhs.h`) — high speed; not "USBFS"
+>
+> **DFP location:** `C:/Users/I74182/.mchp_packs/Microchip/PIC32CZ-CA90_DFP/1.7.168/CA90/include/`
 
-#### P2 — I2C master (prerequisite for IMU, mag, baro)
-4. Add missing register header `hardware/sam_sercom_i2c.h` (I2C mode CTRLA/B, BAUD, STATUS)
-5. Implement `sam_i2c_master.c` (port from samd5e5/sam_i2c_master.c)
-6. Fix Kconfig wiring: `PIC32CZCA90_SERCOM*_ISI2C` must `select PIC32CZCA90_HAVE_I2C_MASTER`
-   (currently Make.defs compiles sam_i2c_master.c on `HAVE_I2C_MASTER` but Kconfig never sets it)
-7. Wire up I2C bus in `boards/microchip/czca90curiosity/src/init.c` (currently stub returns -1)
+#### P1 — SD Card Logging — PIO mode (flight logs → /fs/microsd)
+> J700 PKOB4 console works for development — J200 USB (USBHS) is not needed yet.
+> SD card logging is the highest-value first step: immediately useful for debugging all
+> subsequent driver work. PIO mode has no DMA dependency and no external hardware constraint.
+- `hardware/sam_sdmmc.h` from DFP `component/sdmmc.h`; SDMMC0 `GCLK_ID=58/59`, `MCLK_ID_AHB=69`, `MCLK_ID_APB=70`
+- `sam_sdmmc.c` — **PIO mode** (CPU-polled FIFO, no system DMA); isolates driver issues from DMA issues
+- Board init: card detect GPIO, `mmcsd_slotinitialize()`, `mkdir("/fs/microsd")`, `mount("/dev/mmcsd0", "/fs/microsd", "vfat")`
+- **Win:** `ls /fs/microsd` succeeds; `.ulg` log file written after armed flight
 
-#### P3 — SPI master (prerequisite for SPI sensors / external flash)
-8. Add missing register header `hardware/sam_sercom_spi.h`
-9. Implement `sam_spi.c` (port from samd5e5/sam_spi.c)
-10. Fix Kconfig wiring: `PIC32CZCA90_SERCOM*_ISSPI` must `select PIC32CZCA90_HAVE_SPI`
+#### P2 — SQI Flash Parameter Storage (params/caldata/dataman)
+> SQI1 integrated BD-DMA — no system DMA dependency. Needed before Stage 6 bench validation
+> (param persistence test). See `docs/sqi_filesystem.md` for full MTD stack walkthrough.
+- `hardware/sam_sqi.h` from DFP `component/sqi.h`; SQI1 base `0x4F009000`, `GCLK_ID=57`, `MCLK_ID_AHB=67`
+- `sam_sqi.c` — SPI-compatibility mode using integrated BD-DMA; ULBPR (0x98) unlock before first write
+- BD descriptors in nocache MPU region (0x200F0000 already reserved in linker)
+- `qspi.c` board file: `sam_sqibus_initialize(1)`, JEDEC probe, MTD stack:
+  `mtd_partition()` → `ftl_initialize()` → `bchdev_register()` → `px4_mtd_register_instance()`
+- Call order in `board_app_initialize()`: SQI init first, SD card second
+- **Win:** `param set SYS_AUTOSTART 4001`; reboot; `param show` returns 4001
 
-#### P4 — Timer/PWM (prerequisite for motor output)
-11. Add missing register header `hardware/sam_tcc.h`
-12. Implement `sam_oneshot.c`, `sam_oneshot_lowerhalf.c`, `sam_freerun.c` (timer abstractions over TCC)
-13. Implement TCC PWM driver — TCC0 has multiple match/capture channels → PWM outputs for motors
-14. Implement PX4 `io_timer` abstraction over TCC (in `boards/microchip/czca90curiosity/src/`)
-15. Add TCC GCLK channel assignments to `sam_sercom.c` / board clock init
+#### P3 — System DMA
+> Needed for: DShot burst (Stage 7.1) + optional SDMMC DMA upgrade. Neither SQI nor
+> PIO SDMMC requires system DMA.
+- `hardware/sam_dma.h` from DFP `component/dma.h`; `MCLK_ID_AXI=24`, `MCLK_ID_APB=25`
+- `sam_dma.c` — BD-based transfer, NuttX `sam_dmachannel`/`sam_dmasetup`/`sam_dmastart` API
+- MPU nocache region at 0x200F0000 for BD structs (already reserved in linker)
+- **Cache coherency (critical):** TX: `up_clean_dcache()` + DMB **before** start;
+  RX: `up_invalidate_dcache()` **after** complete. Applies to BD structs too.
+- **Pin mux warning:** verify no DMA-backed peripheral pin overlaps before enabling;
+  shared-pin conflicts cause silent per-bit data corruption
+- **Win:** DMA memory-to-memory transfer test passes
 
-#### P5 — USB CDC-ACM (MAVLink over J200)
-16. Add missing register header `hardware/sam_usb.h` (USB FS device controller regs)
-17. Implement `sam_usb.c` — USB full-speed device driver (CA90 has FS USB, not HS)
-18. Remove `-ENODEV` stubs in `boards/microchip/czca90curiosity/src/init.c`
-19. Enable `CONFIG_USBDEV`, `CONFIG_CDCACM` in defconfig
-20. Restore `param set SYS_USB_AUTO 0` in rc.board_defaults once USB driver works
+#### P4 — EIC (sensor DRDY interrupts)
+- `hardware/sam_eic.h` from DFP `component/eic.h`; `sam_eic.c`; GCLK channel 5 → GCLK3 (32 kHz)
+- `sam_eic_config(pin, sense)` for IMU DRDY on PA8 (rising edge); wire to NVIC
 
-#### P6 — ADC / battery monitoring
-21. Add missing register header `hardware/sam_adc.h`
-22. Implement ADC driver (ADC0/ADC1, 16 channels each, 12-bit SAR)
-23. Wire battery voltage divider channel to PX4 battery_status module
+#### P5 — SPI Master → IMU (SERCOM3)
+- `hardware/sam_sercom_spi.h` from DFP `component/sercom.h` (CTRLA.MODE=2)
+- `sam_spi.c`; DMA-backed (P3); SERCOM3: PC12/PC13/PC15, CS=PC14, DRDY=PA8 (EIC, P4)
+- Fix Kconfig: `PIC32CZCA90_SERCOM3_ISSPI` must `select PIC32CZCA90_HAVE_SPI`
+- **Win:** `icm42688p info` shows WHO_AM_I=0x47; `listener sensor_gyro` shows data at 2 kHz
 
-#### P7 — CAN-FD
-24. Add missing register header `hardware/sam_mcan.h` (MCAN — ISO 11898-1 CAN-FD)
-25. Implement `sam_mcan.c` (port from SAMV7 mcan driver — same IP block)
-26. Enable CAN0-5 in defconfig and board init as needed
+#### P6 — I2C Master → Magnetometer + Barometer (SERCOM5)
+- `hardware/sam_sercom_i2c.h` from DFP `component/sercom.h` (CTRLA.MODE=4)
+- `sam_i2c_master.c`; SERCOM5: PC25=SDA, PC26=SCL; fix Kconfig `HAVE_I2C_MASTER` wiring
+- **Win:** `i2cdetect 5` shows ACK at 0x0E (mag) and 0x76 (baro); EKF2 converges
 
-#### P8 — Safety / misc
-27. Implement `sam_wdt.c` — watchdog timer (flight safety requirement)
-28. Implement `sam_eic.c` — external interrupt controller (needed for sensor data-ready IRQs)
-29. Add `hardware/sam_eic.h`, `hardware/sam_wdt.h` register headers
-30. Implement SDHC driver (`hardware/sam_sdhc.h` + driver) for SD card data logging
-31. Implement SQI driver (`hardware/sam_sqi.h` + driver) if external flash needed (CA90 uses SQI, not QSPI)
+#### P7 — PWM / TCC (motor outputs)
+- `hardware/sam_tcc.h` ✓ done. Need CCBUF/PATTBUF for TCC1/TCC2 PWM channels
+- `sam_oneshot.c`, `sam_freerun.c`, TCC PWM driver, PX4 `io_timer` abstraction
+- **Pin conflict check:** confirm no PWM pin overlaps with SDMMC/SQI pins before enabling
+- **Win:** `pwm test -c 1234 -p 1100`; oscilloscope shows 1.1 ms pulse on all 4 outputs
 
-**Missing register headers summary** (drivers blocked until these exist):
+#### P8 — USBHS Device Driver (MAVLink + QGroundControl over J200)
+> Required before first hover: QGroundControl calibration (compass, accel, level) and
+> MAVLink arming verification need USBHS. J700 console alone is insufficient for this.
+- `hardware/sam_usbhs.h` from DFP `component/usbhs.h`; USBHS0 `MCLK_ID_AHB=73`
+- `sam_usbhs.c` — NuttX `usbdev_s` lower-half; USB clock via OSCCTRL (no GCLK needed)
+- Remove `-ENODEV` stubs in `init.c`; enable `CONFIG_USBDEV=y`, `CONFIG_CDCACM=y`
+- **Win:** `/dev/ttyACM1` appears on host; QGroundControl receives MAVLink heartbeat
 
-| Header needed | Blocks |
-|---------------|--------|
-| `hardware/sam_sercom_i2c.h` | I2C driver |
-| `hardware/sam_sercom_spi.h` | SPI driver |
-| `hardware/sam_dmac.h` | DMA driver |
-| `hardware/sam_tcc.h` | TCC PWM/timer driver |
-| `hardware/sam_usb.h` | USB driver |
-| `hardware/sam_adc.h` | ADC driver |
-| `hardware/sam_mcan.h` | CAN-FD driver |
-| `hardware/sam_eic.h` | EIC driver |
-| `hardware/sam_wdt.h` | Watchdog driver |
-| `hardware/sam_sdhc.h` | SDHC driver |
-| `hardware/sam_sqi.h` | SQI (external flash) driver |
+#### P9 — PROGMEM Crash Log (crash survives reboot)
+- `sam_progmem.c` — `up_progmem_*` API using `hardware/sam_fcw.h` (already exists)
+- `NSECTORS=2` → last 8 KB of PFM reserved at runtime; no linker change needed
+- defconfig: `CONFIG_PIC32CZCA90_PROGMEM=y`, `CONFIG_MTD_PROGMEM=y`, `CONFIG_BOARD_CRASHDUMP=y`
+- Board config: `HAS_PROGMEM`; board init: `board_hardfault_init(2, true)`
+- **Win:** deliberate PANIC(); reboot; crash dump visible on console
+
+#### P10 — ADC / Battery Monitoring
+- `hardware/sam_adc.h` from DFP `component/adc.h`; ADC0 `GCLK_ID=41`, `MCLK_ID_APB=51`
+- ADC driver (ADC0–ADC3, 12-bit SAR); wire battery voltage divider to PX4 battery_status
+
+#### P11 — CAN-FD (MCAN)
+- `hardware/sam_mcan.h` from DFP `component/can.h`; `sam_mcan.c`
+- CAN3 (J701) `GCLK_CH=48`, CAN4 (J702) `GCLK_CH=49`; ATA6561 transceivers on-board
+
+#### P12 — Safety / Misc
+- `hardware/sam_wdt.h` from DFP `component/wdt.h`; `sam_wdt.c` — 4 s timeout, EWINT at 2 s
+- DSU: `MCLK_ID_AHB=0`, `MCLK_ID_APB=1`; un-stub `board_mcu_version()` / `board_get_uuid32()`
+
+**Missing register headers** (drivers blocked until these exist):
+
+| Header needed              | DFP source                  | Blocks              |
+|----------------------------|-----------------------------|---------------------|
+| `hardware/sam_sdmmc.h`     | `component/sdmmc.h`         | SD card driver (P1) |
+| `hardware/sam_sqi.h`       | `component/sqi.h`           | SQI flash driver (P2) |
+| `hardware/sam_dma.h`       | `component/dma.h`           | System DMA (P3)     |
+| `hardware/sam_eic.h`       | `component/eic.h`           | EIC driver (P4)     |
+| `hardware/sam_sercom_spi.h`| `component/sercom.h`        | SPI driver (P5)     |
+| `hardware/sam_sercom_i2c.h`| `component/sercom.h`        | I2C driver (P6)     |
+| `hardware/sam_usbhs.h`     | `component/usbhs.h`         | USB HS driver (P8)  |
+| `hardware/sam_adc.h`       | `component/adc.h`           | ADC driver (P10)    |
+| `hardware/sam_mcan.h`      | `component/can.h`           | CAN-FD driver (P11) |
+| `hardware/sam_wdt.h`       | `component/wdt.h`           | Watchdog (P12)      |

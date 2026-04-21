@@ -23,7 +23,9 @@
 
 #include <nuttx/config.h>
 #include <nuttx/board.h>
+#include <nuttx/clock.h>
 #include <nuttx/usb/usbdev.h>
+#include <nuttx/wqueue.h>
 
 #include <arch/board/board.h>
 #include "arm_internal.h"
@@ -39,6 +41,19 @@ extern void led_init(void);
 extern void led_on(int led);
 extern void led_off(int led);
 __END_DECLS
+
+/* LED1 heartbeat — LPWORK job, toggles at 1 Hz.
+ * If LED1 stops blinking the scheduler has stalled.
+ */
+static struct work_s g_heartbeat_work;
+static bool g_led1_state;
+
+static void heartbeat_cb(FAR void *arg)
+{
+	g_led1_state = !g_led1_state;
+	sam_portwrite(PORT_LED1, !g_led1_state);  /* PORT_LED1 active LOW */
+	work_queue(LPWORK, &g_heartbeat_work, heartbeat_cb, NULL, MSEC2TICK(500));
+}
 
 /************************************************************************************
  * Name: arm_addregion
@@ -151,8 +166,12 @@ __EXPORT int board_app_initialize(uintptr_t arg)
 	/* Initialize HRT (DWT-based for now) */
 	hrt_init();
 
-	/* Turn on the user LED to show we're alive */
+	/* Turn on LED0 to show NuttX booted */
 	led_on(0);
+
+	/* Start LED1 heartbeat: toggles at 1 Hz to confirm scheduler is alive */
+	g_led1_state = false;
+	work_queue(LPWORK, &g_heartbeat_work, heartbeat_cb, NULL, MSEC2TICK(500));
 
 	syslog(LOG_INFO, "[boot] PIC32CZ CA90 board initialization complete\n");
 

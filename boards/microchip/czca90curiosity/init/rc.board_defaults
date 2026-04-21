@@ -12,9 +12,11 @@ param set-default MAV_0_RATE 57600
 param set-default MAV_0_FORWARD 0
 param set-default SDLOG_MODE -1
 
-# Enable sensor processing pipelines
-param set-default SYS_HAS_MAG 1
-param set-default SYS_HAS_BARO 1
+# No sensors connected during initial bringup — disable checks that require them.
+# Change to 1 when physical hardware is installed.
+param set SYS_HAS_MAG 0
+param set SYS_HAS_BARO 0
+param set COM_ARM_SDCARD 0
 
 # Circuit breakers to allow arming without full sensor suite
 param set-default CBRK_SUPPLY_CHK 894281
