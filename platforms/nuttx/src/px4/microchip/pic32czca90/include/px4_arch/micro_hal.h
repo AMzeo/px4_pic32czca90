@@ -34,6 +34,7 @@
 
 #include <px4_platform/micro_hal.h>
 #include <nuttx/i2c/i2c_master.h>
+#include <nuttx/spi/spi.h>
 #include <chip.h>
 
 __BEGIN_DECLS
@@ -66,6 +67,11 @@ __BEGIN_DECLS
 
 /* Bus numbering: PX4 uses 1-based, NuttX uses 0-based */
 #define PX4_BUS_OFFSET       1
+
+/* SPI bus initializer — returns NULL until SERCOM SPI driver (Stage P5) is implemented.
+ * Void-cast of argument prevents "unused variable" warning when board_has_bus() discards it. */
+#define px4_spibus_initialize(bus_num_1based) \
+    ((void)(bus_num_1based), (FAR struct spi_dev_s *)NULL)
 
 /* GPIO abstraction: map px4_arch_* to PIC32CZ CA90 PORT functions */
 #define px4_arch_configgpio(pinset)             sam_portconfig(pinset)

@@ -22,6 +22,8 @@
 #include <nuttx/compiler.h>
 #include <stdint.h>
 
+#include <nuttx/mtd/mtd.h>
+
 #include "sam_port.h"
 #include "hardware/sam_pinmap.h"
 
@@ -33,6 +35,14 @@
 
 #define GPIO_nLED_BLUE    PORT_LED0   /* PB21, active LOW — armed/status */
 #define GPIO_nLED_GREEN   PORT_LED1   /* PB22, active LOW — activity/fault */
+
+/* SDMMC1 — card detect, PC28, active LOW.
+ * Also defined in hardware/pic32czca90_pinmap.h for use by the chip-layer
+ * driver (sam_sdmmc.c cannot include board_config.h directly). */
+
+#ifndef PIN_SDMMC1_CD
+#define PIN_SDMMC1_CD     PORT_SDMMC1_CD
+#endif
 
 #define BOARD_HAS_CONTROL_STATUS_LEDS      1
 #define BOARD_ARMED_STATE_LED  LED_BLUE
@@ -46,9 +56,19 @@
 #define BOARD_NUMBER_DIGITAL_BRICKS  1
 #define BOARD_ADC_BRICK_VALID        (1)
 
-/* No sensors, PWM, QSPI, SD card configured yet.
- * These will be added as peripheral drivers are ported.
- */
+/* SQI1 flash (SST26VF032BAT, 4 MB) partition layout
+ * Offsets in erase-sector units (1 sector = 4096 bytes).
+ * Must match docs/sqi_filesystem.md. */
+#define QSPI_PART_PARAMS_OFFSET      0
+#define QSPI_PART_PARAMS_SECTORS     32    /* 128 KB */
+#define QSPI_PART_PARAMS_TYPE        MTD_PARAMETERS
+#define QSPI_PART_CALDATA_OFFSET     32
+#define QSPI_PART_CALDATA_SECTORS    16    /* 64 KB */
+#define QSPI_PART_CALDATA_TYPE       MTD_CALDATA
+#define QSPI_PART_WAYPOINTS_OFFSET   48
+#define QSPI_PART_WAYPOINTS_SECTORS  128   /* 512 KB */
+#define QSPI_PART_WAYPOINTS_TYPE     MTD_WAYPOINTS
+#define QSPI_NUM_PARTITIONS          3
 
 /* No PWM channels */
 #define DIRECT_PWM_OUTPUT_CHANNELS  0
@@ -86,6 +106,11 @@ __BEGIN_DECLS
 #ifndef __ASSEMBLY__
 
 extern void board_peripheral_reset(int ms);
+
+#ifdef CONFIG_PIC32CZCA90_SQI1
+extern int board_qspi_flash_init(void);
+extern int board_qspi_create_partitions(struct mtd_dev_s *mtd);
+#endif
 
 #include <px4_platform_common/board_common.h>
 

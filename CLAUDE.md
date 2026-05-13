@@ -192,6 +192,19 @@ DFLL48M (48 MHz, enabled at reset, not configured in software)
 OSCULP32K → GCLK3 (SRC=3, DIV=1) → 32.768 kHz → SERCOM slow clock
 ```
 
+**Full GCLK generator map (do not put new peripherals on GCLK1 — console+HRT only):**
+
+| Generator | Source | DIV | Output | Assigned peripherals |
+|-----------|--------|-----|--------|----------------------|
+| GCLK0 | PLL0 | 1 | 300 MHz | CPU |
+| GCLK1 | PLL0 | /2 (DIVSEL=1) | 150 MHz | SERCOM1 (console), TCC0 (HRT) — **reserved, do not add** |
+| GCLK2 | PLL0 | 3 | 100 MHz | SQI1 (`GCLK_PCHCTRL[57] = GEN(2)\|CHEN`) |
+| GCLK3 | OSCULP32K | 1 | 32.768 kHz | SERCOM slow, WDT, EIC |
+| GCLK4 | PLL0 | 3 | 100 MHz | SDMMC1 main (`GCLK_PCHCTRL[60] = GEN(4)\|CHEN`) |
+| GCLK5 | PLL0 | 25 | 12 MHz | SDMMC1 slow (`GCLK_PCHCTRL[61] = GEN(5)\|CHEN`) |
+
+GCLK2/GCLK4/GCLK5 are not yet configured in board.h — must be enabled at Stage 1.
+
 **Peripheral frequencies (hardware verified):**
 
 | Peripheral | Clock | Frequency | Notes |
@@ -447,20 +460,70 @@ Three files that NuttX core includes everywhere — critical to get right:
 >
 > **DFP location:** `C:/Users/I74182/.mchp_packs/Microchip/PIC32CZ-CA90_DFP/1.7.168/CA90/include/`
 
-#### P1 — SD Card Logging — PIO mode (flight logs → /fs/microsd)
+#### P1 — SD Card Logging — ADMA2 mode (flight logs → /fs/microsd)
 > J700 PKOB4 console works for development — J200 USB (USBHS) is not needed yet.
 > SD card logging is the highest-value first step: immediately useful for debugging all
-> subsequent driver work. PIO mode has no DMA dependency and no external hardware constraint.
-- `hardware/sam_sdmmc.h` from DFP `component/sdmmc.h`; SDMMC0 `GCLK_ID=58/59`, `MCLK_ID_AHB=69`, `MCLK_ID_APB=70`
-- `sam_sdmmc.c` — **PIO mode** (CPU-polled FIFO, no system DMA); isolates driver issues from DMA issues
-- Board init: card detect GPIO, `mmcsd_slotinitialize()`, `mkdir("/fs/microsd")`, `mount("/dev/mmcsd0", "/fs/microsd", "vfat")`
+> subsequent driver work.
+>
+> **CRITICAL: Use SDMMC1, NOT SDMMC0.**
+> The Curiosity Ultra micro-SD socket is physically wired to SDMMC1 pins
+> (PC30/CLK, PG03/CMD, PC31/DAT0, PG00/DAT1, PG01/DAT2, PG02/DAT3, PC28/CD).
+> SDMMC0 (PC08–PC15) has no SD socket connection on this board.
+>
+> **CRITICAL: SDMMC1 and SQI1 share the same physical pins — mux=8 vs mux=7.**
+> At any given time only one peripheral can own them. Strategy:
+> - Boot: mux=7 (SQI1) — load params into RAM from flash
+> - After params loaded: re-mux to 8 (SDMMC1) — SD card logging
+> - Param save: re-mux to 7 (SQI1) briefly, write, re-mux back to 8
+> For Stage 1.1 alone (no SQI yet) params fall back to `/fs/microsd/etc/parameters`.
+>
+> **Transfer mode:** ADMA2 (not CPU-polled PIO) — this is what Harmony `plib_sdmmc1.c` uses.
+> ADMA2 descriptor = `SDMMC_ADMA_DESCR`; `SDMMC_HC1R_DMASEL(2)` selects it.
+> `DCACHE_CLEAN_BY_ADDR()` on descriptor table before `SDMMC_ASAR` write.
+>
+> **GCLK assignment (separate generators — do not share with GCLK1):**
+> - SDMMC1 main clock: GCLK4 → 100 MHz (PLL0/3); `GCLK_PCHCTRL[60] = GEN(4)|CHEN`
+> - SDMMC1 slow clock: GCLK5 → 12 MHz (PLL0/25); `GCLK_PCHCTRL[61] = GEN(5)|CHEN`
+> - Harmony reference: `sdmmc_fat/plib_clock.c` uses GEN(1) and GEN(2) — adapt to our GCLK map.
+>
+> **Harmony reference files:** `core_apps_pic32cz_ca8x_ca9x/apps/fs/sdmmc_fat/firmware/src/`
+> — `plib_sdmmc1.c` is the canonical hardware init/DMA reference.
+> Variant ID: `sdmmc_44002` (identifiable by `SDMMC_DBGR_NIDBG` register unique to this IP).
+>
+> **NuttX port base:** `arch/arm/src/sama5/sam_sdmmc.c` — same SDMMC IP, register names match CA90 DFP.
+>
+- `hardware/sam_sdmmc.h` from DFP `component/sdmmc.h`; **SDMMC1** base `0x460A0000`, `GCLK_ID=60`, `GCLK_ID_SLOW=61`, `MCLK_ID_AHB=71`, `MCLK_ID_APB=72`
+- `sam_sdmmc.c` — **ADMA2 mode**; single descriptor handles up to 65536 bytes; no system DMA dependency
+- Board init: card detect on PC28 (GPIO, active LOW), `mmcsd_slotinitialize()`, `mkdir("/fs/microsd")`, `mount("/dev/mmcsd0", "/fs/microsd", "vfat")`
+- `board_app_initialize()`: SQI init first (if P2 done), SD card second
 - **Win:** `ls /fs/microsd` succeeds; `.ulg` log file written after armed flight
 
 #### P2 — SQI Flash Parameter Storage (params/caldata/dataman)
 > SQI1 integrated BD-DMA — no system DMA dependency. Needed before Stage 6 bench validation
 > (param persistence test). See `docs/sqi_filesystem.md` for full MTD stack walkthrough.
-- `hardware/sam_sqi.h` from DFP `component/sqi.h`; SQI1 base `0x4F009000`, `GCLK_ID=57`, `MCLK_ID_AHB=67`
-- `sam_sqi.c` — SPI-compatibility mode using integrated BD-DMA; ULBPR (0x98) unlock before first write
+>
+> **CRITICAL: SQI1 and SDMMC1 share pins — see P1 pin-sharing note above.**
+>
+> **GCLK assignment:**
+> - SQI1 main clock: GCLK2 → 100 MHz (PLL0/3); `GCLK_PCHCTRL[57] = GEN(2)|CHEN`
+> - Harmony reference `sqi_read_write/plib_clock.c`: uses GEN(1)=100 MHz — adapt to GCLK2.
+> - SQI clock div: `SQI_CLKCON_CLKDIV(0x1U)` → GCLK2/2 = 50 MHz at SQI1 SCK.
+>
+> **BD descriptor struct** (`sqi_dma_desc_t`, from `plib_sqi_common.h`, variant `sqi_04044`):
+> ```c
+> typedef struct { uint32_t bd_ctrl; uint32_t bd_stat;
+>                  uint32_t *bd_bufaddr; struct sqi_dma_desc *bd_nxtptr;
+>                  uint8_t cache_align_dummy[16]; } sqi_dma_desc_t; // 32 bytes
+> ```
+> Must live in nocache MPU region (0x200F0000). `DCACHE_CLEAN_BY_ADDR()` on BOTH the BD
+> struct AND the data buffer before `SQI1_DMATransfer()`. RX path: `DCACHE_INVALIDATE_BY_ADDR()`
+> after completion. TX BD: no `DIR` bit. RX BD: `SQI_BDCTRL_DIR_Msk`. `CS_DEASSERT_Msk` on
+> last BD. `LAST_BD_Msk | LIFM_Msk` mark end of chain.
+>
+> **Flash unlock:** ULBPR (0x98) requires WREN (0x06) first; must be done before any write/erase.
+>
+- `hardware/sam_sqi.h` from DFP `component/sqi.h`; SQI1 base `0x4F009000`, `GCLK_ID=57`, `MCLK_ID_AHB=67` (no APB ID); `SQI1_XIP_ADDR=0x90000000`
+- `sam_sqi.c` — NuttX `spi_dev_s` lower-half wrapping SQI1 BD-DMA; `sst26_initialize_spi()` as upper-half MTD
 - BD descriptors in nocache MPU region (0x200F0000 already reserved in linker)
 - `qspi.c` board file: `sam_sqibus_initialize(1)`, JEDEC probe, MTD stack:
   `mtd_partition()` → `ftl_initialize()` → `bchdev_register()` → `px4_mtd_register_instance()`
@@ -484,8 +547,12 @@ Three files that NuttX core includes everywhere — critical to get right:
 - `sam_eic_config(pin, sense)` for IMU DRDY on PA8 (rising edge); wire to NVIC
 
 #### P5 — SPI Master → IMU (SERCOM3)
+> **CRITICAL: SERCOM3 option A pins (PC12–PC15, mux D) conflict with SDMMC0 (PC08–PC15, mux I).**
+> SDMMC0 is not connected to any SD socket on the Curiosity Ultra, but the pin overlap still
+> exists in silicon. Use SERCOM3 **option B** pins instead — no conflicts:
+> - PD03 = PAD0 (MOSI), PD04 = PAD1 (SCK), PD05 = PAD2 (MISO), PD06 = PAD3 (CS) — all mux D=3
 - `hardware/sam_sercom_spi.h` from DFP `component/sercom.h` (CTRLA.MODE=2)
-- `sam_spi.c`; DMA-backed (P3); SERCOM3: PC12/PC13/PC15, CS=PC14, DRDY=PA8 (EIC, P4)
+- `sam_spi.c`; DMA-backed (P3); SERCOM3: **PD03/PD04/PD05/PD06** (option B, mux D), CS=PD06, DRDY=PA8 (EIC, P4)
 - Fix Kconfig: `PIC32CZCA90_SERCOM3_ISSPI` must `select PIC32CZCA90_HAVE_SPI`
 - **Win:** `icm42688p info` shows WHO_AM_I=0x47; `listener sensor_gyro` shows data at 2 kHz
 
@@ -531,7 +598,7 @@ Three files that NuttX core includes everywhere — critical to get right:
 
 | Header needed              | DFP source                  | Blocks              |
 |----------------------------|-----------------------------|---------------------|
-| `hardware/sam_sdmmc.h`     | `component/sdmmc.h`         | SD card driver (P1) |
+| `hardware/sam_sdmmc.h`     | `component/sdmmc.h`         | SD card driver (P1) — use SDMMC1 (base 0x460A0000), not SDMMC0 |
 | `hardware/sam_sqi.h`       | `component/sqi.h`           | SQI flash driver (P2) |
 | `hardware/sam_dma.h`       | `component/dma.h`           | System DMA (P3)     |
 | `hardware/sam_eic.h`       | `component/eic.h`           | EIC driver (P4)     |

@@ -270,7 +270,7 @@ The `spi_dev_s` wrapper translates standard SPI calls into BD operations.
 
 ### SPI wrapper interface
 
-`sam_sqi.c` must implement these `spi_dev_s` operations so the SST26 MTD driver works:
+`sam_sqi.c` must implement these `spi_dev_s` operations so the SST26 MTD driver works:a
 
 ```c
 static const struct spi_ops_s g_sqi_ops = {

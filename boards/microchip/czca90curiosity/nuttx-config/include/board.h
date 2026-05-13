@@ -50,10 +50,10 @@
 
 #define BOARD_GCLK0_FREQUENCY    BOARD_DPLL0_FREQUENCY          /* 300 MHz  */
 #define BOARD_GCLK1_FREQUENCY    (BOARD_DPLL0_FREQUENCY / 2)    /* 150 MHz  */
-#define BOARD_GCLK2_FREQUENCY    0                              /* Disabled */
+#define BOARD_GCLK2_FREQUENCY    (BOARD_DPLL0_FREQUENCY / 3)   /* 100 MHz — SQI1 */
 #define BOARD_GCLK3_FREQUENCY    BOARD_OSC32K_FREQUENCY         /* 32.768kHz*/
-#define BOARD_GCLK4_FREQUENCY    BOARD_DPLL0_FREQUENCY          /* 300 MHz  */
-#define BOARD_GCLK5_FREQUENCY    (BOARD_XOSC0_FREQUENCY / 2)   /* 6 MHz    */
+#define BOARD_GCLK4_FREQUENCY    (BOARD_DPLL0_FREQUENCY / 3)    /* 100 MHz — SDMMC1 main */
+#define BOARD_GCLK5_FREQUENCY    (BOARD_DPLL0_FREQUENCY / 25)   /* 12 MHz — SDMMC1 slow */
 #define BOARD_GCLK6_FREQUENCY    0                              /* Disabled */
 #define BOARD_GCLK7_FREQUENCY    0
 #define BOARD_GCLK8_FREQUENCY    0
@@ -134,14 +134,14 @@
 #define BOARD_GCLK1_SOURCE       6         /* PLL0_1 = 300 MHz (CA90: 6) */
 #define BOARD_GCLK1_DIV          2         /* 300 MHz / 2 = 150 MHz */
 
-/* GCLK2 - disabled */
+/* GCLK2 - 100 MHz from PLL0/3 → SQI1 (GCLK_PCHCTRL[57]) */
 
-#define BOARD_GCLK2_ENABLE       FALSE
+#define BOARD_GCLK2_ENABLE       TRUE
 #define BOARD_GCLK2_OOV          FALSE
 #define BOARD_GCLK2_OE           FALSE
 #define BOARD_GCLK2_RUNSTDBY     FALSE
-#define BOARD_GCLK2_SOURCE       1
-#define BOARD_GCLK2_DIV          1
+#define BOARD_GCLK2_SOURCE       6         /* PLL0_1 = 300 MHz */
+#define BOARD_GCLK2_DIV          3         /* 300 / 3 = 100 MHz */
 
 /* GCLK3 - 32.768 kHz from OSCULP32K (slow clock for SERCOM slow, WDT) */
 
@@ -152,26 +152,23 @@
 #define BOARD_GCLK3_SOURCE       3         /* OSCULP32K = 3 on CA90 (not 4) */
 #define BOARD_GCLK3_DIV          1
 
-/* GCLK4 - 300 MHz from DPLL0 */
+/* GCLK4 - 100 MHz from PLL0/3 → SDMMC1 main clock (GCLK_PCHCTRL[60]) */
 
 #define BOARD_GCLK4_ENABLE       TRUE
 #define BOARD_GCLK4_OOV          FALSE
 #define BOARD_GCLK4_OE           FALSE
 #define BOARD_GCLK4_RUNSTDBY     FALSE
-#define BOARD_GCLK4_SOURCE       6         /* PLL0_1 = 300 MHz (CA90: 6 not 7) */
-#define BOARD_GCLK4_DIV          1
+#define BOARD_GCLK4_SOURCE       6         /* PLL0_1 = 300 MHz */
+#define BOARD_GCLK4_DIV          3         /* 300 / 3 = 100 MHz */
 
-/* GCLK5 - disabled. Was the XOSC0/2 reference for DPLL0 in an earlier design.
- *         Current design uses sam_pll0_init() with PLL0 referencing DFLL directly
- *         (REFSEL=2), so no GCLK is needed as PLL reference.  GCLK_PCHCTRL[1]
- *         (PLL0 reference channel) is therefore never programmed either. */
+/* GCLK5 - 12 MHz from PLL0/25 → SDMMC1 slow clock (GCLK_PCHCTRL[61]) */
 
-#define BOARD_GCLK5_ENABLE       FALSE
+#define BOARD_GCLK5_ENABLE       TRUE
 #define BOARD_GCLK5_OOV          FALSE
 #define BOARD_GCLK5_OE           FALSE
 #define BOARD_GCLK5_RUNSTDBY     FALSE
-#define BOARD_GCLK5_SOURCE       1         /* (don't care, disabled) */
-#define BOARD_GCLK5_DIV          1
+#define BOARD_GCLK5_SOURCE       6         /* PLL0_1 = 300 MHz */
+#define BOARD_GCLK5_DIV          25        /* 300 / 25 = 12 MHz */
 
 /* GCLK6-11 - disabled */
 

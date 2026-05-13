@@ -9,6 +9,8 @@
 add_library(drivers_board
 	init.c
 	led.c
+	qspi.c
+	spi.cpp
 )
 
 # HRT accuracy test command — accessible from NSH as 'hrt_test'
@@ -28,6 +30,15 @@ px4_add_module(
 	DEPENDS
 		arch_io_pins
 )
+
+# SQI flash write path test — 'sqi_test'
+px4_add_module(
+	MODULE board_sqi_test
+	MAIN sqi_test
+	SRCS
+		sqi_test.c
+)
+
 
 target_link_libraries(drivers_board
 	PRIVATE
