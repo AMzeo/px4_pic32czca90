@@ -43,6 +43,7 @@
 #include <nuttx/spi/spi.h>
 #include <nuttx/mtd/mtd.h>
 #include <nuttx/drivers/drivers.h>
+#include <nuttx/mutex.h>
 #include <sys/mount.h>
 
 #include <px4_platform_common/px4_mtd.h>
@@ -82,6 +83,45 @@ static const struct qspi_part_s g_qspi_parts[QSPI_NUM_PARTITIONS] =
 };
 
 static struct mtd_dev_s *g_qspi_mtd = NULL;
+static mutex_t g_sqi_mtd_lock = NXMUTEX_INITIALIZER;
+
+#ifdef CONFIG_PIC32CZCA90_SDMMC1
+static bool g_sdmmc1_active = false;
+
+static void pins_to_sqi1(void)
+{
+  if (!g_sdmmc1_active) { return; }
+
+  sam_portconfig(PORT_SQI1_CLK);
+  sam_portconfig(PORT_SQI1_CS0);
+  sam_portconfig(PORT_SQI1_IO0);
+  sam_portconfig(PORT_SQI1_IO1);
+  sam_portconfig(PORT_SQI1_IO2);
+  sam_portconfig(PORT_SQI1_IO3);
+}
+
+static void pins_to_sdmmc1(void)
+{
+  if (!g_sdmmc1_active) { return; }
+
+  sam_portconfig(PORT_SDMMC1_CLK);
+  sam_portconfig(PORT_SDMMC1_CMD);
+  sam_portconfig(PORT_SDMMC1_DAT0);
+#  ifdef CONFIG_PIC32CZCA90_SDMMC1_WIDTH_D1_D4
+  sam_portconfig(PORT_SDMMC1_DAT1);
+  sam_portconfig(PORT_SDMMC1_DAT2);
+  sam_portconfig(PORT_SDMMC1_DAT3);
+#  endif
+}
+
+void board_qspi_set_sdmmc_active(bool active)
+{
+  g_sdmmc1_active = active;
+}
+#else
+static inline void pins_to_sqi1(void) {}
+static inline void pins_to_sdmmc1(void) {}
+#endif /* CONFIG_PIC32CZCA90_SDMMC1 */
 
 /* PX4 MTD registration state */
 static mtd_instance_s         g_mtd_instance;
@@ -146,10 +186,31 @@ static void xip_word_copy(uint8_t *dst, uintptr_t xip_addr, size_t nbytes)
     }
 }
 
+static void qspi_dcache_invalidate(uintptr_t addr, size_t nbytes)
+{
+  uintptr_t a;
+  uintptr_t end = addr + nbytes;
+
+  for (a = addr & ~31u; a < end; a += 32)
+    {
+      putreg32(a, 0xE000EF5Cu);  /* DCIMVAC */
+    }
+
+  __asm__ volatile ("dsb sy" ::: "memory");
+}
+
 static ssize_t qspi_xip_read(FAR struct mtd_dev_s *dev, off_t offset,
                               size_t nbytes, FAR uint8_t *buffer)
 {
-  xip_word_copy(buffer, SAM_SQI1_XIP_BASE + (uintptr_t)offset, nbytes);
+  uintptr_t xip_addr = SAM_SQI1_XIP_BASE + (uintptr_t)offset;
+
+  nxmutex_lock(&g_sqi_mtd_lock);
+  pins_to_sqi1();
+  sam_sqi_enter_xip();
+  qspi_dcache_invalidate(xip_addr, nbytes);
+  xip_word_copy(buffer, xip_addr, nbytes);
+  pins_to_sdmmc1();
+  nxmutex_unlock(&g_sqi_mtd_lock);
   return (ssize_t)nbytes;
 }
 
@@ -158,7 +219,15 @@ static ssize_t qspi_xip_bread(FAR struct mtd_dev_s *dev, off_t startblock,
 {
   off_t offset = startblock << 8;
   size_t nbytes = nblocks << 8;
-  xip_word_copy(buffer, SAM_SQI1_XIP_BASE + (uintptr_t)offset, nbytes);
+  uintptr_t xip_addr = SAM_SQI1_XIP_BASE + (uintptr_t)offset;
+
+  nxmutex_lock(&g_sqi_mtd_lock);
+  pins_to_sqi1();
+  sam_sqi_enter_xip();
+  qspi_dcache_invalidate(xip_addr, nbytes);
+  xip_word_copy(buffer, xip_addr, nbytes);
+  pins_to_sdmmc1();
+  nxmutex_unlock(&g_sqi_mtd_lock);
   return (ssize_t)nblocks;
 }
 
@@ -254,17 +323,15 @@ static int qspi_wait_write_complete(void)
 static int qspi_mtd_erase(FAR struct mtd_dev_s *dev, off_t startblock,
                            size_t nblocks)
 {
-  static uint8_t cmd[256];
+  uint8_t cmd[256];
   size_t i;
 
-
-  /* Note: WBPR pre-erase removed — it poisoned BD state for subsequent SE */
+  nxmutex_lock(&g_sqi_mtd_lock);
+  pins_to_sqi1();
 
   for (i = 0; i < nblocks; i++)
     {
       uint32_t addr = (uint32_t)(startblock + i) * SST26_SECTOR_SIZE;
-      /* Use linked TX→TX BD chain: WREN(1B,LIFM) → SE(4B,LIFM).
-       * Single DMA operation — no SWRST between WREN and SE. */
 
       /* Pad SE to 256 bytes — BD processor drops short (4-byte) TX BDs
        * from param save context but transmits long (260-byte) PP correctly.
@@ -277,87 +344,112 @@ static int qspi_mtd_erase(FAR struct mtd_dev_s *dev, off_t startblock,
       cmd[3] = addr & 0xFF;
       sam_sqi_flash_wren_cmd(cmd, 256);
 
-      int sr = sam_sqi_flash_rdsr();
-      PX4_INFO("ERASE: addr=0x%06x RDSR=0x%02x (WIP=%d)",
-               (unsigned)addr, sr, sr & 1);
+      sam_sqi_flash_rdsr();
 
       int ret = qspi_wait_write_complete();
       if (ret < 0)
         {
-          sam_sqi_enter_xip();
+          pins_to_sdmmc1();
+          nxmutex_unlock(&g_sqi_mtd_lock);
           return ret;
         }
 
-      /* Invalidate D-Cache for erased sector so XIP reads get fresh data */
+      qspi_dcache_invalidate(SAM_SQI1_XIP_BASE + addr, SST26_SECTOR_SIZE);
 
-      {
-        uintptr_t a;
-        for (a = (SAM_SQI1_XIP_BASE + addr) & ~31u;
-             a < SAM_SQI1_XIP_BASE + addr + SST26_SECTOR_SIZE;
-             a += 32)
-          putreg32(a, 0xE000EF5Cu);  /* DCIMVAC */
-        __asm__ volatile ("dsb sy" ::: "memory");
-      }
+      /* Verify erase: spot-check first 4 bytes are 0xFF */
+
+      sam_sqi_enter_xip();
+      volatile uint32_t *check = (volatile uint32_t *)(SAM_SQI1_XIP_BASE + addr);
+      if (*check != 0xFFFFFFFFu)
+        {
+          PX4_ERR("ERASE: verify failed at 0x%06x (got 0x%08x)",
+                  (unsigned)addr, (unsigned)*check);
+          pins_to_sdmmc1();
+          nxmutex_unlock(&g_sqi_mtd_lock);
+          return -EIO;
+        }
     }
 
-  sam_sqi_enter_xip();
+  pins_to_sdmmc1();
+  nxmutex_unlock(&g_sqi_mtd_lock);
   return (int)nblocks;
 }
 
 static ssize_t qspi_mtd_bwrite(FAR struct mtd_dev_s *dev, off_t startblock,
                                 size_t nblocks, FAR const uint8_t *buffer)
 {
-  static uint8_t cmd[4 + SST26_PAGE_SIZE];  /* static: saves 260 bytes of LPWORK stack */
+  uint8_t cmd[4 + SST26_PAGE_SIZE];
+  uint8_t verify[SST26_PAGE_SIZE];
   size_t i;
 
+  nxmutex_lock(&g_sqi_mtd_lock);
+  pins_to_sqi1();
 
   for (i = 0; i < nblocks; i++)
     {
       uint32_t addr = (uint32_t)(startblock + i) * SST26_PAGE_SIZE;
+      const uint8_t *src = &buffer[i * SST26_PAGE_SIZE];
       uint8_t wren = SST26_CMD_WREN;
+      int attempt;
 
-      /* Same pattern as sqi_test: WREN → RDSR(verify WEL) → PP */
-
-      sam_sqi_flash_cmd_write(&wren, 1);
-
-      int wel = sam_sqi_flash_rdsr();
-      if (wel < 0 || !(wel & 0x02))
+      for (attempt = 0; attempt < 3; attempt++)
         {
-          PX4_ERR("BWRITE: WEL not set after WREN (RDSR=0x%02x)", wel);
+          sam_sqi_flash_cmd_write(&wren, 1);
+
+          int wel = sam_sqi_flash_rdsr();
+          if (wel < 0 || !(wel & 0x02))
+            {
+              PX4_ERR("BWRITE: WEL not set (RDSR=0x%02x) blk=%d attempt=%d",
+                      wel, (int)(startblock + i), attempt);
+              if (attempt == 2)
+                {
+                  pins_to_sdmmc1();
+                  nxmutex_unlock(&g_sqi_mtd_lock);
+                  return -EIO;
+                }
+              continue;
+            }
+
+          cmd[0] = SST26_CMD_PP;
+          cmd[1] = (addr >> 16) & 0xFF;
+          cmd[2] = (addr >> 8) & 0xFF;
+          cmd[3] = addr & 0xFF;
+          memcpy(&cmd[4], src, SST26_PAGE_SIZE);
+          sam_sqi_flash_cmd_write(cmd, 4 + SST26_PAGE_SIZE);
+
+          int ret = qspi_wait_write_complete();
+          if (ret < 0)
+            {
+              pins_to_sdmmc1();
+              nxmutex_unlock(&g_sqi_mtd_lock);
+              return ret;
+            }
+
+          /* Verify: read back via XIP and compare */
+
+          qspi_dcache_invalidate(SAM_SQI1_XIP_BASE + addr, SST26_PAGE_SIZE);
           sam_sqi_enter_xip();
+          xip_word_copy(verify, SAM_SQI1_XIP_BASE + addr, SST26_PAGE_SIZE);
+
+          if (memcmp(verify, src, SST26_PAGE_SIZE) == 0)
+            {
+              break;
+            }
+
+          PX4_ERR("BWRITE: verify mismatch blk=%d attempt=%d",
+                  (int)(startblock + i), attempt);
+        }
+
+      if (attempt == 3)
+        {
+          pins_to_sdmmc1();
+          nxmutex_unlock(&g_sqi_mtd_lock);
           return -EIO;
         }
-
-      cmd[0] = SST26_CMD_PP;
-      cmd[1] = (addr >> 16) & 0xFF;
-      cmd[2] = (addr >> 8) & 0xFF;
-      cmd[3] = addr & 0xFF;
-      memcpy(&cmd[4], &buffer[i * SST26_PAGE_SIZE], SST26_PAGE_SIZE);
-      sam_sqi_flash_cmd_write(cmd, 4 + SST26_PAGE_SIZE);
-
-      /* Wait for completion */
-
-      int ret = qspi_wait_write_complete();
-      if (ret < 0)
-        {
-          sam_sqi_enter_xip();
-          return ret;
-        }
-
-      /* Invalidate D-Cache for written page so XIP reads get fresh data */
-
-      {
-        uintptr_t a;
-        for (a = (SAM_SQI1_XIP_BASE + addr) & ~31u;
-             a < SAM_SQI1_XIP_BASE + addr + SST26_PAGE_SIZE;
-             a += 32)
-          putreg32(a, 0xE000EF5Cu);  /* DCIMVAC */
-        __asm__ volatile ("dsb sy" ::: "memory");
-      }
-
     }
 
-  sam_sqi_enter_xip();
+  pins_to_sdmmc1();
+  nxmutex_unlock(&g_sqi_mtd_lock);
   return (ssize_t)nblocks;
 }
 

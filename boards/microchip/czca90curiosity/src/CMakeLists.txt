@@ -31,13 +31,23 @@ px4_add_module(
 		arch_io_pins
 )
 
-# SQI flash write path test — 'sqi_test'
-px4_add_module(
-	MODULE board_sqi_test
-	MAIN sqi_test
-	SRCS
-		sqi_test.c
-)
+if(CONFIG_PIC32CZCA90_SQI1)
+	# SQI flash write path test — 'sqi_test'
+	px4_add_module(
+		MODULE board_sqi_test
+		MAIN sqi_test
+		SRCS
+			sqi_test.c
+	)
+
+	# SQI PIO vs DMA comparison test — 'sqi_pio_test'
+	px4_add_module(
+		MODULE board_sqi_pio_test
+		MAIN sqi_pio_test
+		SRCS
+			sqi_pio_test.c
+	)
+endif()
 
 
 target_link_libraries(drivers_board

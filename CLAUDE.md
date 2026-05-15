@@ -309,6 +309,7 @@ When any clock frequency, GCLK source, SERCOM pin, or baud rate changes — upda
 | Wrong GCLK channel IDs for TCC and CAN | `hardware/sam_gclk.h` | TCC GCLK channels (31-40) were SAMD5x-derived shared groups; CAN channels placed at 31-36 (wrong). Would route TCC0 to wrong GCLK channel, breaking HRT and any TCC peripheral | CA90 DFP: each TCC has individual channel — TCC0=31…TCC9=40; CAN0=46…CAN5=51; GMAC=52 (verified from Harmony plib_clock.c + DFP instance/tcc0.h, instance/can0.h) |
 | Missing TCC MCLK APB clock IDs | `hardware/sam_mclk.h` | `MCLK_ID_APB_TCC0` through `MCLK_ID_APB_TCC9` not defined (41-50) — hrt_init() would fail to enable TCC0 APB clock, leaving TCC0 registers inaccessible | Added all 10 TCC MCLK IDs (41-50) after SERCOM9 definition |
 | HRT callouts never fired — all PX4 tasks stall | `platforms/nuttx/src/px4/microchip/pic32czca90/hrt/hrt.c` | `hrt_call_every()` queued work items that sat in queue forever; all PX4 `ScheduledWorkItem` modules (commander, sensors, nav) never executed their periodic work; `ps` showed every task `Waiting` | Complete rewrite: TCC0 free-running at 150 MHz (GCLK1, DIV1), CC[0] compare match ISR fires `hrt_call_invoke()` at each deadline, `hrt_reschedule()` programs next CC[0]; READSYNC protocol for COUNT reads (Harmony-verified) |
+| SQI param save: value not persisting across reboot | `boards/microchip/czca90curiosity/src/qspi.c` | `param set X 99999; param save; reboot; param show X` → value reverted to default. BSON import showed empty file (5 bytes). No error messages on save. | Root cause: D-cache coherency. FTL read-modify-write cycle read stale cached XIP data (old flash contents) and wrote it back, overwriting the just-saved param. Fix: (1) D-cache invalidate before every XIP read; (2) remove unnecessary XIP re-entry between erase/write; (3) mutex for concurrency; (4) read-back verification with 3 retries; (5) static buffers → stack-local |
 
 ### NuttX Integration
 
@@ -445,6 +446,9 @@ Three files that NuttX core includes everywhere — critical to get right:
 - `sam_gclk.h` TCC/CAN channel IDs corrected to DFP values: TCC0-9 = channels 31-40 (individual, not shared); CAN0-5 = 46-51; GMAC=52 ✓
 - `sam_mclk.h` TCC MCLK APB IDs added: MCLK_ID_APB_TCC0=41 through MCLK_ID_APB_TCC9=50 ✓
 - HRT (hrt.c) rewritten: TCC0 free-running 32-bit counter at GCLK1=150 MHz; CC[0] compare match ISR drives `hrt_call_invoke()`; READSYNC protocol for COUNT reads; 64-bit time extension via `g_base_time_us`; `hrt_reschedule()` programs next deadline; all PX4 `ScheduledWorkItem` periodic tasks now fire ✓
+- SQI1 flash parameter storage production-ready: custom MTD ops (direct BD-DMA writes, XIP reads), D-cache invalidation before every read, mutex concurrency protection, read-back verification with 3 retries, erase spot-check. `param save` → reboot → `param show` verified on hardware ✓
+- `hardware/sam_sqi.h` added: SQI register definitions, BD descriptor struct, XIP base address, GCLK/MCLK IDs — all DFP-verified ✓
+- GCLK2 configured: PLL0/3 = 100 MHz → SQI1 core clock (`GCLK_PCHCTRL[57]`) ✓
 
 **Pending — by priority for a flying PX4 system:**
 
@@ -477,6 +481,13 @@ Three files that NuttX core includes everywhere — critical to get right:
 > - Param save: re-mux to 7 (SQI1) briefly, write, re-mux back to 8
 > For Stage 1.1 alone (no SQI yet) params fall back to `/fs/microsd/etc/parameters`.
 >
+> **HARDWARE DESIGN NOTE (future board revision):** The pin-mux arbitration between
+> SQI1 and SDMMC1 is a Curiosity Ultra dev board limitation — both peripherals are
+> routed to the same 6 physical pins (PC30/PC31/PG00-PG03). On a custom flight
+> controller PCB, route SQI1 and SDMMC1 to separate pin groups (the CA90 208-pin
+> package has alternate SDMMC0 on PC08-PC15 or SQI0 on separate pins). This eliminates
+> the mux switching overhead and the risk window during param save operations.
+>
 > **Transfer mode:** ADMA2 (not CPU-polled PIO) — this is what Harmony `plib_sdmmc1.c` uses.
 > ADMA2 descriptor = `SDMMC_ADMA_DESCR`; `SDMMC_HC1R_DMASEL(2)` selects it.
 > `DCACHE_CLEAN_BY_ADDR()` on descriptor table before `SDMMC_ASAR` write.
@@ -498,37 +509,22 @@ Three files that NuttX core includes everywhere — critical to get right:
 - `board_app_initialize()`: SQI init first (if P2 done), SD card second
 - **Win:** `ls /fs/microsd` succeeds; `.ulg` log file written after armed flight
 
-#### P2 — SQI Flash Parameter Storage (params/caldata/dataman)
-> SQI1 integrated BD-DMA — no system DMA dependency. Needed before Stage 6 bench validation
-> (param persistence test). See `docs/sqi_filesystem.md` for full MTD stack walkthrough.
+#### P2 — SQI Flash Parameter Storage (params/caldata/dataman) — DONE ✓
+> **Completed 2026-05-13.** Params persist across reboot (hardware-verified).
+> See `docs/sqi_hardware_behavior.md` for full silicon quirk documentation.
 >
-> **CRITICAL: SQI1 and SDMMC1 share pins — see P1 pin-sharing note above.**
+> **CRITICAL: SQI1 and SDMMC1 share pins — mux=7 (SQI) vs mux=8 (SDMMC).**
+> Currently SQI1 owns the pins full-time. When SDMMC1 is added, pin mux
+> switching is required between SQI and SDMMC operations.
 >
-> **GCLK assignment:**
-> - SQI1 main clock: GCLK2 → 100 MHz (PLL0/3); `GCLK_PCHCTRL[57] = GEN(2)|CHEN`
-> - Harmony reference `sqi_read_write/plib_clock.c`: uses GEN(1)=100 MHz — adapt to GCLK2.
-> - SQI clock div: `SQI_CLKCON_CLKDIV(0x1U)` → GCLK2/2 = 50 MHz at SQI1 SCK.
+> **Architecture:** Custom MTD ops (qspi.c) bypass NuttX sst26.c entirely.
+> Reads via XIP (0x90000000) with D-cache invalidation. Writes/erases via
+> BD-DMA with read-back verification. Mutex protects all ops.
 >
-> **BD descriptor struct** (`sqi_dma_desc_t`, from `plib_sqi_common.h`, variant `sqi_04044`):
-> ```c
-> typedef struct { uint32_t bd_ctrl; uint32_t bd_stat;
->                  uint32_t *bd_bufaddr; struct sqi_dma_desc *bd_nxtptr;
->                  uint8_t cache_align_dummy[16]; } sqi_dma_desc_t; // 32 bytes
-> ```
-> Must live in nocache MPU region (0x200F0000). `DCACHE_CLEAN_BY_ADDR()` on BOTH the BD
-> struct AND the data buffer before `SQI1_DMATransfer()`. RX path: `DCACHE_INVALIDATE_BY_ADDR()`
-> after completion. TX BD: no `DIR` bit. RX BD: `SQI_BDCTRL_DIR_Msk`. `CS_DEASSERT_Msk` on
-> last BD. `LAST_BD_Msk | LIFM_Msk` mark end of chain.
->
-> **Flash unlock:** ULBPR (0x98) requires WREN (0x06) first; must be done before any write/erase.
->
-- `hardware/sam_sqi.h` from DFP `component/sqi.h`; SQI1 base `0x4F009000`, `GCLK_ID=57`, `MCLK_ID_AHB=67` (no APB ID); `SQI1_XIP_ADDR=0x90000000`
-- `sam_sqi.c` — NuttX `spi_dev_s` lower-half wrapping SQI1 BD-DMA; `sst26_initialize_spi()` as upper-half MTD
-- BD descriptors in nocache MPU region (0x200F0000 already reserved in linker)
-- `qspi.c` board file: `sam_sqibus_initialize(1)`, JEDEC probe, MTD stack:
-  `mtd_partition()` → `ftl_initialize()` → `bchdev_register()` → `px4_mtd_register_instance()`
-- Call order in `board_app_initialize()`: SQI init first, SD card second
-- **Win:** `param set SYS_AUTOSTART 4001`; reboot; `param show` returns 4001
+- `hardware/sam_sqi.h` — register defs, BD struct, XIP base, GCLK/MCLK IDs ✓
+- `sam_sqi.c` — BD-DMA engine, XIP mode, JEDEC/RDSR/cmd primitives ✓
+- `qspi.c` — custom MTD ops, D-cache invalidation, mutex, verification ✓
+- **Win:** `param set CBRK_SUPPLY_CHK 894281`; reboot; `param show` returns 894281 ✓
 
 #### P3 — System DMA
 > Needed for: DShot burst (Stage 7.1) + optional SDMMC DMA upgrade. Neither SQI nor
@@ -598,8 +594,6 @@ Three files that NuttX core includes everywhere — critical to get right:
 
 | Header needed              | DFP source                  | Blocks              |
 |----------------------------|-----------------------------|---------------------|
-| `hardware/sam_sdmmc.h`     | `component/sdmmc.h`         | SD card driver (P1) — use SDMMC1 (base 0x460A0000), not SDMMC0 |
-| `hardware/sam_sqi.h`       | `component/sqi.h`           | SQI flash driver (P2) |
 | `hardware/sam_dma.h`       | `component/dma.h`           | System DMA (P3)     |
 | `hardware/sam_eic.h`       | `component/eic.h`           | EIC driver (P4)     |
 | `hardware/sam_sercom_spi.h`| `component/sercom.h`        | SPI driver (P5)     |

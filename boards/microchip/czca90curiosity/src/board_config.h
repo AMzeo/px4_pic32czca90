@@ -110,6 +110,9 @@ extern void board_peripheral_reset(int ms);
 #ifdef CONFIG_PIC32CZCA90_SQI1
 extern int board_qspi_flash_init(void);
 extern int board_qspi_create_partitions(struct mtd_dev_s *mtd);
+#  ifdef CONFIG_PIC32CZCA90_SDMMC1
+extern void board_qspi_set_sdmmc_active(bool active);
+#  endif
 #endif
 
 #include <px4_platform_common/board_common.h>

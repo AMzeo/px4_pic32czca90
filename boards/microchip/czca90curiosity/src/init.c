@@ -233,6 +233,15 @@ __EXPORT int board_app_initialize(uintptr_t arg)
 		{
 			syslog(LOG_ERR, "[boot] sam_sdmmc1_slotinitialize: %d\n", ret);
 		}
+		else
+		{
+#ifdef CONFIG_PIC32CZCA90_SQI1
+			board_qspi_set_sdmmc_active(true);
+			syslog(LOG_INFO, "[boot] SDMMC1 ready, pin-mux arbitration active\n");
+#else
+			syslog(LOG_INFO, "[boot] SDMMC1 ready (SQI1 disabled, no pin conflict)\n");
+#endif
+		}
 		/* Mount is handled by rcS: mount -t vfat /dev/mmcsd0 /fs/microsd */
 	}
 #endif /* CONFIG_PIC32CZCA90_SDMMC1 */

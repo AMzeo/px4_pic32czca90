@@ -1,13 +1,18 @@
 #!/bin/sh
 # PIC32CZ CA90 Curiosity Ultra board defaults
 
-# Select SQI flash MTD for parameter storage (SD card write is unreliable).
-# /fs/mtd_params is created by board_qspi_create_partitions() in init.c
-# (128 KB BCH partition on SST26VF032BAT via SQI1).
-param select /fs/mtd_params
-param import
+# Parameter storage: SD card (/fs/microsd/params) while testing SDMMC in isolation.
+# SQI flash (MTD) disabled temporarily - will re-enable with re-init dance for coexistence.
+# rc.filepaths already sets PARAM_FILE=/fs/microsd/params via CONFIG_BOARD_PARAM_FILE.
 
-# USB CDC/ACM driver not yet implemented — disable cdcacm_autostart.
+if [ -d "/fs/microsd" ]
+then
+	echo "INFO [init] SD card mounted at /fs/microsd"
+else
+	echo "WARN [init] SD card NOT mounted - /fs/microsd missing"
+fi
+
+# USB CDC/ACM driver not yet implemented - disable cdcacm_autostart.
 # NOTE: param set-default does NOT override the active in-memory value when
 # param import fails (no storage). param set forces the value for this session.
 param set-default SYS_AUTOSTART 0
@@ -16,9 +21,9 @@ param set-default USB_MAV_MODE 0
 param set-default MAV_0_CONFIG 101
 param set-default MAV_0_RATE 57600
 param set-default MAV_0_FORWARD 0
-param set-default SDLOG_MODE 0
+param set-default SDLOG_MODE -1
 
-# No sensors connected during initial bringup — disable checks that require them.
+# No sensors connected during initial bringup - disable checks that require them.
 # Change to 1 when physical hardware is installed.
 param set-default SYS_HAS_MAG 0
 param set-default SYS_HAS_BARO 0
