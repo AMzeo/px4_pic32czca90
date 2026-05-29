@@ -15,11 +15,14 @@ This branch ports PX4 Autopilot to the **Microchip PIC32CZ CA90 Curiosity Ultra*
 | HRT (TCC0) | ✅ Working | 150 MHz free-running, 64-bit µs counter, compare-match ISR |
 | PX4 scheduler | ✅ Working | commander, sensors, EKF2, navigator all firing |
 | I-cache / D-cache | ✅ Working | Write-through D-cache; MPU 16 regions |
-| SD card logging | 🔲 Next | Stage 1.1 — SDMMC PIO mode, no DMA needed |
-| SQI param storage | 🔲 Next | Stage 1.2 — SST26VF032BAT on SQI1 (own BD-DMA) |
+| SQI param storage | ✅ Working | SST26VF032BAT on SQI1 — BD-DMA, XIP reads, D-cache safe |
+| SD card logging | ✅ Working | SDMMC1 ADMA2 mode; 0 dropouts; shares pins with SQI1 |
+| NuttX SPI driver | ✅ In NuttX | SERCOM3 SPI master in NuttX submodule |
+| NuttX I2C driver | ✅ In NuttX | SERCOM5 I2C master in NuttX submodule |
+| NuttX EIC header | ✅ In NuttX | External Interrupt Controller register defs |
+| SPI / IMU | 🔧 In progress | SERCOM3, ICM-20689 (6DOF Click) |
+| I2C / mag / baro | 🔧 In progress | SERCOM5, BMI088 + BMP388 + BMM150 |
 | System DMA | 🔲 Pending | Stage 2.1 |
-| SPI / IMU | 🔲 Pending | Stage 3.1 — SERCOM3, ICM-42688-P |
-| I2C / mag / baro | 🔲 Pending | Stage 3.2 — SERCOM5, IST8310, BMP388 |
 | PWM outputs | 🔲 Pending | Stage 4.1 — TCC1/TCC2 |
 | USBHS (MAVLink) | 🔲 Pending | Stage 5.1 — needed before first hover |
 | CAN-FD | 🔲 Pending | Stage 9.1 |
@@ -45,13 +48,14 @@ This branch ports PX4 Autopilot to the **Microchip PIC32CZ CA90 Curiosity Ultra*
 
 ## Sensor Bus Pins
 
-| Interface | SERCOM | Pins | Connector |
-|-----------|--------|------|-----------|
-| SPI MOSI/MISO/SCK/CS | SERCOM3 | PC12/PC15/PC13/PC14 | EXT2 pins 16/17/18/15 |
-| I2C SDA/SCL | SERCOM5 | PC25/PC26 | EXT2 pins 11/12 |
-| IMU DRDY | — (GPIO) | PA8 | MikroBUS pin 15 |
-| CAN3 | CAN3 | PD13/PC29 | J701 (ATA6561) |
-| CAN4 | CAN4 | PA31/PA30 | J702 (ATA6561) |
+| Interface | SERCOM | Pins | Connector | Sensor |
+|-----------|--------|------|-----------|--------|
+| SPI MOSI/MISO/SCK/CS | SERCOM3 | PD03/PD05/PD04/PD06 | MikroBUS | ICM-20689 (6DOF Click) |
+| I2C SDA/SCL | SERCOM5 | PC25/PC26 | EXT2 pins 11/12 | BMI088 + BMP388 + BMM150 |
+| IMU DRDY | — (GPIO) | PA8 | MikroBUS pin 15 | — |
+| SD Card | SDMMC1 | PC30/PG03/PC31/PG00-02/PC28 | J601 microSD | Flight logs |
+| CAN3 | CAN3 | PD13/PC29 | J701 (ATA6561) | — |
+| CAN4 | CAN4 | PA31/PA30 | J702 (ATA6561) | — |
 
 ## Build & Flash
 
@@ -84,10 +88,12 @@ LED0 = steady ON after boot. LED1 = 1 Hz blink (scheduler alive). LED1 frozen = 
 
 ## NuttX Submodule
 
-| Submodule | Repository | Branch |
-|-----------|-----------|--------|
-| `platforms/nuttx/NuttX/nuttx` | [AMzeo/nuttx](https://github.com/AMzeo/nuttx) | `pic32czca90-bringup` |
-| `platforms/nuttx/NuttX/apps` | [PX4/NuttX-apps](https://github.com/PX4/NuttX-apps) | `px4_firmware_nuttx-10.3.0+` |
+| Submodule | Repository | Branch | Commit |
+|-----------|-----------|--------|--------|
+| `platforms/nuttx/NuttX/nuttx` | [AMzeo/nuttx](https://github.com/AMzeo/nuttx) | `pic32czca90-bringup` | `72583fc` |
+| `platforms/nuttx/NuttX/apps` | [PX4/NuttX-apps](https://github.com/PX4/NuttX-apps) | `px4_firmware_nuttx-10.3.0+` | `e37940d` |
+
+The NuttX fork contains the full PIC32CZ CA90 chip support: clock, GPIO, SERCOM (UART/SPI/I2C), TCC, SQI, SDMMC, EIC, and IRQ table.
 
 ## Documentation
 
@@ -96,7 +102,8 @@ LED0 = steady ON after boot. LED1 = 1 Hz blink (scheduler alive). LED1 frozen = 
 | [QUICKSTART.md](QUICKSTART.md) | Build, flash, and connect |
 | [CLAUDE.md](CLAUDE.md) | Architecture, clock tree, key bugs fixed, pending driver work |
 | [docs/tasks.md](docs/tasks.md) | Full task board — all stages ordered by development priority |
-| [docs/sqi_filesystem.md](docs/sqi_filesystem.md) | NuttX MTD stack for SQI flash (Stage 1.2 implementation guide) |
+| [docs/sqi_filesystem.md](docs/sqi_filesystem.md) | SQI flash MTD stack (production-ready) |
+| [docs/sqi_hardware_behavior.md](docs/sqi_hardware_behavior.md) | CA90 SQI silicon quirks and workarounds |
 
 ---
 

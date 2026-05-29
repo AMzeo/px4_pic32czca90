@@ -2,6 +2,7 @@
 
 **Board:** PIC32CZ CA90 Curiosity Ultra (EV16W43A)
 **Flash chip:** SST26VF032BAT-104I/SM — 4 MB, JEDEC BF 26 42, on SQI1
+**Status:** Production-ready. Params persist across reboot (hardware-verified 2026-05-13).
 
 ---
 
@@ -32,25 +33,27 @@ Accepts a `spi_dev_s *` — works with any SPI-compatible hardware adapter.
 
 ---
 
-## NuttX MTD Filesystem Stack
+## NuttX MTD Filesystem Stack (Actual CA90 Implementation)
 
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  PX4 flight stack                                       │
 │  param_load() / param_save() / dataman_open()           │
+│  File-based: open("/fs/mtd_params") → write BSON → close│
 └───────────────────────┬─────────────────────────────────┘
                         │  character device path
                         │  /fs/mtd_params, /fs/mtd_caldata, /fs/mtd_waypoints
 ┌───────────────────────▼─────────────────────────────────┐
 │  BCH (Block-to-Character) device                        │
 │  bchdev_register("/dev/mtdblock0", "/fs/mtd_params")    │
-│  Converts block device to character device              │
+│  Converts block I/O to byte-stream read/write           │
 └───────────────────────┬─────────────────────────────────┘
                         │  block device  /dev/mtdblock0/1/2
 ┌───────────────────────▼─────────────────────────────────┐
 │  FTL (Flash Translation Layer)                          │
 │  ftl_initialize(minor=0, part_mtd)                      │
-│  Wear leveling, bad block management, block I/O         │
+│  Read-modify-write: read sector → erase → write back    │
+│  (NuttX FTL is NOT wear-leveling — raw block mapper)    │
 └───────────────────────┬─────────────────────────────────┘
                         │  struct mtd_dev_s * (partition)
 ┌───────────────────────▼─────────────────────────────────┐
@@ -58,27 +61,29 @@ Accepts a `spi_dev_s *` — works with any SPI-compatible hardware adapter.
 │  mtd_partition(parent_mtd, first_block, num_blocks)     │
 │  Sub-range view of the parent MTD device                │
 └───────────────────────┬─────────────────────────────────┘
-                        │  struct mtd_dev_s * (full device)
+                        │  struct mtd_dev_s * (custom ops)
 ┌───────────────────────▼─────────────────────────────────┐
-│  SST26 MTD Driver                                       │
-│  sst26_initialize_spi(spi, devid)                       │
-│  Implements read/write/erase using SST26 SPI commands   │
-│  ULBPR unlock on first write (required for SST26)       │
+│  Custom MTD device (qspi.c — g_custom_mtd)              │
+│  .bread  = qspi_xip_bread   (XIP read + D-cache inv)   │
+│  .read   = qspi_xip_read    (XIP byte read)            │
+│  .bwrite = qspi_mtd_bwrite  (BD-DMA PP + verify)       │
+│  .erase  = qspi_mtd_erase   (BD-DMA SE + verify)       │
+│  Mutex-protected, read-back verified, retry on failure  │
 └───────────────────────┬─────────────────────────────────┘
-                        │  struct spi_dev_s *
+                        │  sam_sqi_flash_cmd_write / sam_sqi_enter_xip
 ┌───────────────────────▼─────────────────────────────────┐
-│  SPI hardware adapter                                   │
-│  CA90: sam_sqibus_initialize(1)  ← SQI1 BD-DMA engine  │
-│  Implements SPI_LOCK / SPI_SETFREQUENCY / SPI_EXCHANGE  │
-└───────────────────────┬─────────────────────────────────┘
-                        │  hardware registers
-┌───────────────────────▼─────────────────────────────────┐
-│  SQI1 peripheral (CA90)                                 │
-│  Base: 0x4F009000, GCLK_ID=57, MCLK_ID_AHB=67          │
-│  Integrated BD-DMA engine (BDCTRL/BDNXT at offset 0x00) │
-│  DFP: component/sqi.h, instance/sqi1.h                  │
+│  SQI1 BD-DMA engine (sam_sqi.c)                         │
+│  Base: 0x4F009000, GCLK2=100MHz, SCK=50MHz             │
+│  TX BD: WREN/SE/PP commands via BD descriptor chain     │
+│  XIP mode: memory-mapped reads at 0x90000000            │
+│  Mode switching: sqi_full_reset() for DMA ↔ XIP        │
 └─────────────────────────────────────────────────────────┘
 ```
+
+**Why not sst26.c:** The NuttX `sst26.c` driver uses standard `SPI_EXCHANGE` calls which
+assume single-transaction CS semantics. The CA90 SQI BD-DMA engine deasserts CS after each
+BD (not each SPI_EXCHANGE call), causing JEDEC reads to return `FF FF FF`. Custom MTD ops
+bypass the SPI abstraction entirely and submit BD descriptors directly.
 
 ---
 

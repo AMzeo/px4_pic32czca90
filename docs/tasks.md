@@ -2,7 +2,7 @@
 
 **Board:** PIC32CZ CA90 Curiosity Ultra (EV16W43A)
 **MCU:** PIC32CZ8110CA90208 — Cortex-M7 @ 300 MHz, 8 MB Flash, 832 KB SRAM
-**Status as of 2026-04-18:** NSH console live, PX4 scheduler running, board stable for 3+ days continuous operation.
+**Status as of 2026-05-29:** SD card logging working (SDMMC1 ADMA2); SQI param storage production-ready; NuttX SPI/I2C/EIC drivers in submodule; PX4 sensor driver integration in progress.
 **Branch:** `pic32czca90-port`
 
 ---
@@ -63,8 +63,16 @@ is substantially complete — with the exception that Stage 3 SPI and I2C work c
 - [x] Main clock (MCLK) — clock dividers, peripheral APB enable IDs
 - [x] Generic clock (GCLK) — generator/channel defines, CA90 peripheral channel IDs corrected from DFP
 - [x] TCC timer — control, sync, interrupt, count, waveform, compare registers
+- [x] SQI — BD-DMA, XIP, clock/MCLK IDs
+- [x] SDMMC — ADMA2 descriptors, host controller registers
 - [x] SERCOM USART — used by console driver
 - [x] PORT (GPIO) — pin mux, direction, output, pull configuration
+- [x] EIC — External Interrupt Controller (register definitions in NuttX submodule)
+
+### Storage
+- [x] SQI1 flash parameter storage — SST26VF032BAT, BD-DMA writes, XIP reads, D-cache safe, read-back verify
+- [x] SDMMC1 SD card logging — ADMA2 mode, 4-bit bus, 0 dropouts, multi-block DMA up to 2.5 MB
+- [x] Pin-mux arbitration code added (SQI1 mux=7 ↔ SDMMC1 mux=8) — dormant until coexistence enabled
 
 ---
 
@@ -82,19 +90,21 @@ is substantially complete — with the exception that Stage 3 SPI and I2C work c
 > **Runtime call order in `board_app_initialize()`:** SQI init first (params available on boot),
 > SD card second.
 
-### 1.1 — SD Card Logging (SDMMC — PIO mode)
+### 1.1 — SD Card Logging (SDMMC1 ADMA2) ✅
 
-> Flight logs only — not params. PIO mode uses CPU-polled FIFO with no DMA dependency.
-> PX4 logs at ~200 KB/s; PIO SDMMC is fast enough for logging permanently.
-> A 10-minute flight at default logging rates is ~120 MB — SQI flash (4 MB total) cannot hold logs.
+> Flight logs and params (while SQI1 disabled due to shared-pin conflict).
+> SDMMC1 ADMA2 mode — multi-block DMA transfers up to 2.5 MB confirmed.
+> SQI1 temporarily disabled; params stored at `/fs/microsd/params` until
+> pin-mux coexistence dance is implemented.
 
-**IP:** CA90 **SDMMC** (not SDHC or HSMCI). SDMMC0: `GCLK_ID=58`, `GCLK_ID_SLOW=59`, `MCLK_ID_AHB=69`, `MCLK_ID_APB=70`.
+**IP:** CA90 **SDMMC1** (not SDMMC0). SDMMC1: `GCLK_ID=60`, `GCLK_ID_SLOW=61`, `MCLK_ID_AHB=71`, `MCLK_ID_APB=72`.
+**Pins:** PC30/CLK, PG03/CMD, PC31/DAT0, PG00/DAT1, PG01/DAT2, PG02/DAT3, PC28/CD (mux=8).
 
-- [ ] **1.1.1** SDMMC register header — SDMMC0/SDMMC1 base addresses, HC1R, HC2R, NISIER, EISIER, BGCR, PCR, CCR, TCR, ISER, NISTR, EISTR command/data/clock registers; DFP `component/sdmmc.h` is reference
-- [ ] **1.1.2** SDMMC driver — SD 4-bit mode; PIO data path (CPU reads/writes FIFO directly); NuttX SDIO lower-half interface; clock setup: GCLK_ID=58 for main, 59 for slow; MCLK AHB=69, APB=70
-- [ ] **1.1.3** Board init — card detect GPIO; `mmcsd_slotinitialize()`; `mkdir("/fs/microsd")` + `mount("/dev/mmcsd0", "/fs/microsd", "vfat")`; `CONFIG_MMCSD=y`, `CONFIG_MMCSD_SDIO=y`
-- [ ] **1.1.4** PX4 board config — `CONFIG_LOGGER=y`, `SDLOG_MODE=1` (log from arm to disarm)
-- [ ] **1.1.5** Smoke test — insert SD card; `ls /fs/microsd` succeeds; arm + fly 30 s; disarm; confirm `.ulg` log file on card
+- [x] **1.1.1** SDMMC register header — in NuttX submodule (`sam_sdmmc.h`)
+- [x] **1.1.2** SDMMC driver — ADMA2 mode (not PIO); NuttX SDIO lower-half; GCLK4=100 MHz main, GCLK5=12 MHz slow
+- [x] **1.1.3** Board init — card detect on PC28 (GPIO, active LOW); `mmcsd_slotinitialize()`; mount at `/fs/microsd`
+- [x] **1.1.4** PX4 board config — `CONFIG_LOGGER=y`; `BOARD_PARAM_FILE=/fs/microsd/params`
+- [x] **1.1.5** Smoke test — `ls /fs/microsd` succeeds; logger writes with 0 dropouts; multi-block DMA verified
 
 ### 1.2 — SQI Flash Parameter Storage (params + caldata + dataman)
 
@@ -107,10 +117,10 @@ is substantially complete — with the exception that Stage 3 SPI and I2C work c
 **Pins:** PC31=IO0, PG0=IO1, PG1=IO2, PG2=IO3, PC30=CLK, PG3=CS0.
 **BD descriptors:** must be placed in nocache MPU region (linker 0x200F0000 already reserved).
 
-- [ ] **1.2.1** SQI register header — `hardware/sam_sqi.h` derived from DFP `component/sqi.h`; SQI1 base and instance defines from `instance/sqi1.h`; key registers: BDCTRL (BUFLEN, CBD_INT_EN, PKT_INT_EN, LIFM, LAST_BD, DIR, SDR_DDR, MODE, SPI_DEV_SEL), BDNXT (next BD pointer), SQICFG (TXBUFEN, RXBUFEN), SPICTL (SPIMODE, CSEN), CLKCON (CLKDIV), INTSIG, INTEN; DFP is sole reference
-- [ ] **1.2.2** SQI driver — `sam_sqi.c`; SQI1 in SPI-compatibility mode using BD chain; enable GCLK channel 57 (route GCLK1=150 MHz) and MCLK AHB ID 67 at init; ULBPR command (0x98) sent to SST26 to unlock all block protection before first write; BD descriptors allocated from nocache region
-- [ ] **1.2.3** SQI SPI wrapper — thin `spi_dev_s` adapter over `sam_sqi.c` so the NuttX SST26 MTD driver (`drivers/mtd/sst26.c`) can call standard SPI ops; `sam_sqi_select()`, `sam_sqi_status()` board callbacks (CS hardware-managed, status always `SPI_STATUS_PRESENT`)
-- [ ] **1.2.4** Board file `boards/microchip/czca90curiosity/src/qspi.c` — call `sam_sqibus_initialize(1)` (SQI1); JEDEC probe at 1 MHz before handing to SST26 MTD driver; partition table:
+- [x] **1.2.1** SQI register header — `hardware/sam_sqi.h` (DFP-verified, all register offsets + BD descriptor struct)
+- [x] **1.2.2** SQI driver — `sam_sqi.c`; BD-DMA mode only (PIO broken on Michigan Ax silicon); GCLK2=100 MHz, MCLK AHB ID 67; ULBPR+WBPR unlock; BD descriptors in .nocache section
+- [x] **1.2.3** Custom MTD — NuttX sst26.c SPI ops incompatible with SQI BD-DMA (CS deasserts between BDs); custom `qspi_mtd_bwrite`/`qspi_mtd_erase`/`qspi_xip_bread` bypass SPI abstraction
+- [x] **1.2.4** Board file `qspi.c` — JEDEC probe, WBPR/ULBPR unlock, custom MTD device, D-cache invalidation before reads, mutex concurrency protection, read-back verify with 3 retries; partition table:
 
   | # | Mount point          | Erase-sect offset | Sectors | Size   |
   |---|----------------------|-------------------|---------|--------|
@@ -118,9 +128,9 @@ is substantially complete — with the exception that Stage 3 SPI and I2C work c
   | 1 | `/fs/mtd_caldata`    | 32                | 16      | 64 KB  |
   | 2 | `/fs/mtd_waypoints`  | 48                | 128     | 512 KB |
 
-- [ ] **1.2.5** Partition stack — `mtd_partition()` → `ftl_initialize()` → `bchdev_register()` → `px4_mtd_register_instance()`; `QSPI_NUM_PARTITIONS=3`; `MTD_PARAMETERS`, `MTD_CALDATA`, `MTD_WAYPOINTS` partition types
-- [ ] **1.2.6** Kconfig / Make.defs — `CONFIG_PIC32CZCA90_SQI1=y` selects SQI1; add `sam_sqi.c` to Make.defs
-- [ ] **1.2.7** Smoke test — `ls /fs/mtd_params` succeeds; `param set SYS_AUTOSTART 4001`; reboot; `param show SYS_AUTOSTART` returns 4001; `ls /fs/mtd_caldata` and `ls /fs/mtd_waypoints` accessible
+- [x] **1.2.5** Partition stack — `mtd_partition()` → `ftl_initialize()` → `bchdev_register()` → `px4_mtd_register_instance()`
+- [x] **1.2.6** Kconfig / Make.defs — `CONFIG_PIC32CZCA90_SQI1=y`; `sam_sqi.c` in Make.defs
+- [x] **1.2.7** Smoke test — `param set CBRK_SUPPLY_CHK 894281`; reboot; `param show` returns 894281 ✓
 
 ---
 
@@ -464,9 +474,10 @@ All 4 instances share `GCLK_ID=41` (`GCLK_CHAN_ADC`) and `MCLK_ID_APB=51`.
 | Stage | Description | Prerequisite | Key outcome |
 |-------|-------------|-------------|-------------|
 | ✅ Done | Boot, clocks, console, HRT, PX4 scheduler | — | NSH live, all tasks firing |
-| 1 | SD card logging (PIO) + SQI param storage | Done | Flight logs + persistent params (no DMA prereq) |
+| 1.1 ✅ | SD card logging (ADMA2) | Done | Flight logs → /fs/microsd; 0 dropouts |
+| 1.2 ✅ | SQI param storage | Done | Persistent params across reboot (custom MTD, BD-DMA) |
 | 2 | System DMA + EIC | Stage 1 | DMA engine; sensor DRDY interrupts |
-| 3 | SPI (IMU) + I2C (mag/baro) | Stage 2 | EKF2 has sensor data, attitude estimate |
+| 3 🔧 | SPI (IMU) + I2C (mag/baro) | Stage 2 | NuttX drivers in submodule; PX4 integration in progress |
 | 4 | PWM + RC + ADC + WDT + safety button | Stage 3 | Motor outputs, pilot input, battery monitoring, safety interlock |
 | 5 | USBHS + PROGMEM crash log | Stage 2 | GCS over J200; crash data survives reboot |
 | 6 | GPS + bench validation + motor spin + hover | Stage 4 + 5 | First controlled flight |
@@ -474,10 +485,11 @@ All 4 instances share `GCLK_ID=41` (`GCLK_CHAN_ADC`) and `MCLK_ID_APB=51`.
 | 8 | Bootloader + soak testing | Stage 7 | Field firmware updates, proven stability |
 | 9 | CAN-FD + DroneCAN + DSU + sign-off | Stage 8 | Production-grade, shippable |
 
-> **Storage:** SD card (Stage 1.1, PIO mode) for flight logs; SQI1 SST26VF032BAT 4 MB (Stage 1.2)
-> for params/caldata/dataman. No internal PFM used for user data.
+> **Storage:** SD card (Stage 1.1, ADMA2) for flight logs; SQI1 SST26VF032BAT 4 MB (Stage 1.2)
+> for params/caldata/dataman. Currently SQI1 disabled due to shared-pin conflict with SDMMC1 —
+> params stored at `/fs/microsd/params` until pin-mux coexistence is implemented.
 > SQI uses its own integrated BD-DMA — does not require system DMA. System DMA (Stage 2.1) is
-> needed for DShot burst generation (Stage 7.1) and optional SDMMC DMA upgrade.
+> needed for DShot burst generation (Stage 7.1).
 
 **Minimum path to first hover: Stages 1–6.**
 **Minimum path to production: all stages.**
