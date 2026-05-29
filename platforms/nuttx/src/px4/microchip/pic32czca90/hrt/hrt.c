@@ -148,28 +148,30 @@ static void hrt_reschedule(void)
     }
 
   /* Convert absolute deadline (µs) to a TCC COUNT value.
-   * Both g_base_ticks and the COUNT units are 150 MHz ticks / 150.
-   * Deadline ticks = earliest_us * 150.
-   *
-   * We compute the CC[0] value in the 32-bit TCC counter space:
-   *   cc0 = (uint32_t)(earliest_us * 150)
-   *
-   * Because both deadline_us and COUNT derive from the same 150 MHz clock,
-   * the lower 32 bits of (deadline_us * 150) give the correct TCC compare
-   * value — unsigned 32-bit wrap-around arithmetic handles past-deadline
-   * and near-deadline cases correctly.
+   * The lower 32 bits of (deadline_us * 150) give the correct TCC compare
+   * value — unsigned 32-bit wrap-around arithmetic handles the mapping.
    */
   uint32_t cc0 = (uint32_t)((earliest * 150ULL) & 0xFFFFFFFFu);
 
-  /* Guard: if the deadline is so close that cc0 equals current COUNT,
-   * advance by 2 ticks to avoid missing it (fire slightly late but never
-   * silently miss). */
+  /* Guard: if the deadline is in the past or so close that we'd miss the
+   * compare match during the CC[0] sync write, force a near-future fire.
+   *
+   * delta > 0x80000000 means the deadline is in the past (unsigned wrap
+   * interpretation: more than half the 28.6s counter range "ahead" really
+   * means it's behind).  delta < HRT_MIN_TICKS means it's too close —
+   * the SYNCBUSY wait for CC[0] takes ~100+ ns, so we need margin.
+   *
+   * HRT_MIN_TICKS = 300 ticks = 2 µs at 150 MHz — enough for SYNCBUSY
+   * plus ISR exit latency.
+   */
+#define HRT_MIN_TICKS 300u
+
   uint32_t now_count = tcc0_count_read();
   uint32_t delta = cc0 - now_count;   /* unsigned: correct across wrap */
 
-  if (delta == 0 || delta > 0xFFFFFFFEu)
+  if (delta > 0x80000000u || delta < HRT_MIN_TICKS)
     {
-      cc0 = now_count + 2u;
+      cc0 = now_count + HRT_MIN_TICKS;
     }
 
   /* Write CC[0] and wait for synchronization */
@@ -354,6 +356,13 @@ void hrt_call_after(struct hrt_call *entry, hrt_abstime delay,
 {
   irqstate_t flags = enter_critical_section();
 
+  /* Remove from queue if already queued (STM32 pattern — prevents
+   * linked-list corruption from double-add of the same entry). */
+  if (entry->deadline != 0)
+    {
+      sq_rem(&entry->link, &g_callout_queue);
+    }
+
   entry->deadline = hrt_absolute_time() + delay;
   entry->period   = 0;
   entry->callout  = callout;
@@ -374,6 +383,11 @@ void hrt_call_at(struct hrt_call *entry, hrt_abstime calltime,
 {
   irqstate_t flags = enter_critical_section();
 
+  if (entry->deadline != 0)
+    {
+      sq_rem(&entry->link, &g_callout_queue);
+    }
+
   entry->deadline = calltime;
   entry->period   = 0;
   entry->callout  = callout;
@@ -393,6 +407,11 @@ void hrt_call_every(struct hrt_call *entry, hrt_abstime delay,
                     hrt_abstime interval, hrt_callout callout, void *arg)
 {
   irqstate_t flags = enter_critical_section();
+
+  if (entry->deadline != 0)
+    {
+      sq_rem(&entry->link, &g_callout_queue);
+    }
 
   entry->deadline = hrt_absolute_time() + delay;
   entry->period   = interval;
@@ -445,56 +464,90 @@ void hrt_call_delay(struct hrt_call *entry, hrt_abstime delay)
  *
  * Called from the TCC0 MC0 ISR (hrt_tcc_isr).  Also available for
  * diagnostic use from application code.
+ *
+ * Follows the STM32 HRT pattern: zero deadline before callback, re-enter
+ * periodic entries AFTER the callback returns (allows callbacks to cancel
+ * or reschedule via hrt_call_delay without queue corruption).
  */
 void hrt_call_invoke(void)
 {
-  hrt_abstime now = hrt_absolute_time();
+  struct hrt_call *entry;
+  hrt_abstime      deadline;
 
-  irqstate_t flags = enter_critical_section();
-
-  struct hrt_call *entry = (struct hrt_call *)sq_peek(&g_callout_queue);
-
-  while (entry != NULL)
+  while (true)
     {
-      struct hrt_call *next = (struct hrt_call *)sq_next(&entry->link);
+      hrt_abstime now = hrt_absolute_time();
 
-      if (entry->deadline != 0 && entry->deadline <= now)
+      irqstate_t flags = enter_critical_section();
+
+      entry = (struct hrt_call *)sq_peek(&g_callout_queue);
+
+      if (entry == NULL)
         {
-          sq_rem(&entry->link, &g_callout_queue);
+          leave_critical_section(flags);
+          break;
+        }
 
-          hrt_callout cb  = entry->callout;
-          void       *arg = entry->arg;
+      /* Scan for earliest expired entry (queue is unsorted) */
+      struct hrt_call *expired = NULL;
 
-          if (entry->period != 0)
+      while (entry != NULL)
+        {
+          if (entry->deadline != 0 && entry->deadline <= now)
             {
-              /* Reschedule periodic callout relative to original deadline
-               * (avoids drift from ISR latency). */
-              entry->deadline += entry->period;
-              sq_addlast(&entry->link, &g_callout_queue);
+              if (expired == NULL || entry->deadline < expired->deadline)
+                {
+                  expired = entry;
+                }
             }
-          else
+
+          entry = (struct hrt_call *)sq_next(&entry->link);
+        }
+
+      if (expired == NULL)
+        {
+          leave_critical_section(flags);
+          break;
+        }
+
+      sq_rem(&expired->link, &g_callout_queue);
+
+      /* Save the intended deadline for periodic re-entry */
+      deadline = expired->deadline;
+
+      /* Zero deadline to mark as "not queued" — matches STM32 pattern.
+       * This allows the callback to detect the entry is not active. */
+      expired->deadline = 0;
+
+      hrt_callout cb  = expired->callout;
+      void       *arg = expired->arg;
+
+      leave_critical_section(flags);
+
+      /* Invoke the callback outside the critical section */
+      if (cb)
+        {
+          cb(arg);
+        }
+
+      /* Re-enter periodic calls AFTER callback (STM32 pattern).
+       * If the callback called hrt_cancel(), period will be 0. */
+      if (expired->period != 0)
+        {
+          flags = enter_critical_section();
+
+          /* Re-check deadline: callback may have called hrt_call_delay()
+           * to set a new deadline directly. */
+          if (expired->deadline <= now)
             {
-              entry->deadline = 0;
+              expired->deadline = deadline + expired->period;
             }
+
+          sq_addlast(&expired->link, &g_callout_queue);
 
           leave_critical_section(flags);
-
-          if (cb)
-            {
-              cb(arg);
-            }
-
-          flags = enter_critical_section();
-          now   = hrt_absolute_time();
-          entry = (struct hrt_call *)sq_peek(&g_callout_queue);
-        }
-      else
-        {
-          entry = next;
         }
     }
-
-  leave_critical_section(flags);
 }
 
 /**

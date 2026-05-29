@@ -1,7 +1,19 @@
 #!/bin/sh
 #
-# PIC32CZ CA90 Curiosity Ultra - sensors init
+# PIC32CZ CA90 Curiosity Ultra - sensor drivers
 #
-# No sensors configured yet. Add sensor start commands here
-# as Click boards or other sensors are connected.
+# Keep minimal: only start sensors physically connected.
+# Dead-sensor probing causes I2C bus congestion (SAMV71 lesson).
 #
+
+# 6DOF IMU 6 Click (MIKROE-4044) - ICM-20689 on SPI bus 3
+icm20689 -s -b 3 start
+
+# 13DOF Click — test two different I2C sensors simultaneously
+# BMI088 accel only (no gyro — avoids dual-instance PX4 driver bug)
+bmi088_i2c -A -X -b 5 start
+# BMM150 magnetometer
+bmm150 -X -b 5 start
+
+# BMM150 on 13DOF Click — enable after accel+gyro stability proven
+# bmm150 -X -b 5 start

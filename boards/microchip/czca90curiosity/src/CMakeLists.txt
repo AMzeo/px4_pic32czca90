@@ -11,6 +11,15 @@ add_library(drivers_board
 	led.c
 	qspi.c
 	spi.cpp
+	i2c.cpp
+)
+
+# SPI bus debug test — 'spi_test'
+px4_add_module(
+	MODULE board_spi_test
+	MAIN spi_test
+	SRCS
+		spi_test.c
 )
 
 # HRT accuracy test command — accessible from NSH as 'hrt_test'

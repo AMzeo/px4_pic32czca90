@@ -68,10 +68,17 @@ __BEGIN_DECLS
 /* Bus numbering: PX4 uses 1-based, NuttX uses 0-based */
 #define PX4_BUS_OFFSET       1
 
-/* SPI bus initializer — returns NULL until SERCOM SPI driver (Stage P5) is implemented.
- * Void-cast of argument prevents "unused variable" warning when board_has_bus() discards it. */
+/* SPI bus initializer — same pattern as SAMV7 */
+FAR struct spi_dev_s *sam_spibus_initialize(int port);
 #define px4_spibus_initialize(bus_num_1based) \
-    ((void)(bus_num_1based), (FAR struct spi_dev_s *)NULL)
+    sam_spibus_initialize(bus_num_1based)
+
+/* I2C bus initializer — SERCOM number passed directly (no offset) */
+FAR struct i2c_master_s *sam_i2cbus_initialize(int port);
+#define px4_i2cbus_initialize(bus_num_1based) \
+    sam_i2cbus_initialize(bus_num_1based)
+#define px4_i2cbus_uninitialize(dev) \
+    ((void)(dev), 0)
 
 /* GPIO abstraction: map px4_arch_* to PIC32CZ CA90 PORT functions */
 #define px4_arch_configgpio(pinset)             sam_portconfig(pinset)

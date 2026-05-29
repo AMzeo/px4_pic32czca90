@@ -47,9 +47,14 @@
 #define BOARD_HAS_CONTROL_STATUS_LEDS      1
 #define BOARD_ARMED_STATE_LED  LED_BLUE
 
-/* I2C - not yet wired, but PX4 board_common.h requires this */
-#define PX4_NUMBER_I2C_BUSES    1
+/* I2C — SERCOM5 (PC25=SDA, PC26=SCL), registered as bus 5 in board_app_initialize.
+ * PX4_NUMBER_I2C_BUSES must be >= bus number (5) so _bus_clocks[] array is large enough.
+ * BOARD_I2C_LATEINIT prevents px4_platform_init() from calling px4_platform_i2c_init()
+ * before GCLK2 generator is configured (would hang on SYNCBUSY). */
+#define PX4_NUMBER_I2C_BUSES    5
 #define BOARD_NUMBER_I2C_BUSES  1
+#define BOARD_I2C_BUS_CLOCK_INIT {0, 0, 0, 0, 400000}
+#define BOARD_I2C_LATEINIT      1
 
 /* No ADC / battery monitoring yet — use digital brick to avoid ADC dependency */
 #define BOARD_NUMBER_BRICKS          1
@@ -70,6 +75,19 @@
 #define QSPI_PART_WAYPOINTS_TYPE     MTD_WAYPOINTS
 #define QSPI_NUM_PARTITIONS          3
 
+/* SPI — SERCOM3 on EXT2 header (PC12/PC13/PC14/PC15, mux E)
+ * CS is GPIO-controlled (not hardware SS).
+ * DOPO=0: MOSI=PAD0(PC12), SCK=PAD1(PC13)
+ * DIPO=3: MISO=PAD3(PC15)
+ * CS: PC14 (GPIO output, active LOW, initial HIGH) */
+
+#define PX4_SPI_BUS_SENSORS         3
+
+#define GPIO_SPI3_CS_IMU \
+    (PORT_PORTC | PORT_PIN(14) | PORT_FLAG_OUTPUT | PORT_FLAG_OUTVAL_HIGH)
+
+#define PX4_SPIDEV_ICM_42688P       PX4_MK_SPI_SEL(PX4_SPI_BUS_SENSORS, 0)
+
 /* No PWM channels */
 #define DIRECT_PWM_OUTPUT_CHANNELS  0
 
@@ -85,6 +103,7 @@
 
 #define PX4_GPIO_INIT_LIST { \
 		GPIO_nLED_BLUE, \
+		GPIO_SPI3_CS_IMU, \
 	}
 
 /* Hardfault log path */

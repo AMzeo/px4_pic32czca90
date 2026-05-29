@@ -47,7 +47,7 @@ BMI088_Accelerometer::BMI088_Accelerometer(const I2CSPIDriverConfig &config) :
 		_drdy_missed_perf = perf_alloc(PC_COUNT, MODULE_NAME"_accel: DRDY missed");
 	}
 
-	ConfigureSampleRate(1600);
+	ConfigureSampleRate(200);
 }
 
 BMI088_Accelerometer::~BMI088_Accelerometer()

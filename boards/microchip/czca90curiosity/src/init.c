@@ -44,11 +44,22 @@
 #  include "sam_sdmmc.h"
 #endif
 
+#ifdef CONFIG_PIC32CZCA90_SERCOM3_ISSPI
+#  include "sam_spi.h"
+#endif
+
+#ifdef CONFIG_PIC32CZCA90_SERCOM5_ISI2C
+#  include "sam_i2c_master.h"
+#  include <nuttx/i2c/i2c_master.h>
+#endif
+
 __BEGIN_DECLS
 extern void led_init(void);
 extern void led_on(int led);
 extern void led_off(int led);
 __END_DECLS
+
+
 
 /* LED1 heartbeat — LPWORK job, toggles at 1 Hz.
  * If LED1 stops blinking the scheduler has stalled.
@@ -124,7 +135,7 @@ int usbdev_unregister(FAR struct usbdevclass_driver_s *driver)
  ************************************************************************************/
 __EXPORT void board_peripheral_reset(int ms)
 {
-	UNUSED(ms);
+	(void)ms;
 }
 
 /************************************************************************************
@@ -132,7 +143,7 @@ __EXPORT void board_peripheral_reset(int ms)
  ************************************************************************************/
 __EXPORT void board_on_reset(int status)
 {
-	UNUSED(status);
+        (void)status;
 }
 
 /************************************************************************************
@@ -245,6 +256,33 @@ __EXPORT int board_app_initialize(uintptr_t arg)
 		/* Mount is handled by rcS: mount -t vfat /dev/mmcsd0 /fs/microsd */
 	}
 #endif /* CONFIG_PIC32CZCA90_SDMMC1 */
+
+#ifdef CONFIG_PIC32CZCA90_SERCOM3_ISSPI
+	{
+		FAR struct spi_dev_s *spi3 = sam_spibus_initialize(3);
+		if (!spi3) {
+			syslog(LOG_ERR, "[boot] SPI3 init failed\n");
+		} else {
+			syslog(LOG_INFO, "[boot] SPI3 (SERCOM3) ready\n");
+		}
+	}
+#endif
+
+#ifdef CONFIG_PIC32CZCA90_SERCOM5_ISI2C
+	{
+		FAR struct i2c_master_s *i2c5 = sam_i2cbus_initialize(5);
+		if (!i2c5) {
+			syslog(LOG_ERR, "[boot] I2C5 init failed\n");
+		} else {
+			int ret = i2c_register(i2c5, 5);
+			if (ret < 0) {
+				syslog(LOG_ERR, "[boot] i2c_register(5): %d\n", ret);
+			} else {
+				syslog(LOG_INFO, "[boot] I2C5 (SERCOM5) registered as /dev/i2c5\n");
+			}
+		}
+	}
+#endif
 
 	syslog(LOG_INFO, "[boot] PIC32CZ CA90 board initialization complete\n");
 

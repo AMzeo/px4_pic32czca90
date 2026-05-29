@@ -101,6 +101,7 @@ enum ACC_CONF_BIT : uint8_t {
 	acc_bwp_osr_4 = Bit7,        // OSR4
 	// [3:0] acc_odr
 	acc_odr_1600   = Bit3 | Bit2,        // ODR 1600 Hz
+	acc_odr_200    = Bit3 | Bit0,        // ODR 200 Hz
 	// [3:0] acc_odr
 	acc_odr_12_5   = Bit2 | Bit0,        // ODR 12.5 Hz
 	// [3:0] acc_odr

@@ -343,6 +343,186 @@ static void cmd_regs(void)
          (unsigned)mclk_rsvd10);
 }
 
+/**
+ * Test hrt_call_after (one-shot) and hrt_call_every (periodic) callouts.
+ *
+ * This directly tests the CC[0] compare match mechanism that PX4 WorkQueues
+ * depend on.  If this test fails, no WorkQueue-based module will fire.
+ */
+static volatile uint32_t g_oneshot_count;
+static volatile uint32_t g_periodic_count;
+static volatile hrt_abstime g_periodic_last;
+static volatile int64_t g_periodic_max_jitter;
+
+static struct hrt_call g_test_oneshot;
+static struct hrt_call g_test_periodic;
+
+static void oneshot_callback(void *arg)
+{
+  (void)arg;
+  g_oneshot_count++;
+}
+
+static void periodic_callback(void *arg)
+{
+  (void)arg;
+  g_periodic_count++;
+
+  hrt_abstime now = hrt_absolute_time();
+
+  if (g_periodic_last != 0)
+    {
+      int64_t delta = (int64_t)(now - g_periodic_last);
+      int64_t jitter = delta - 1000; /* expected 1000 µs period */
+
+      if (jitter < 0) jitter = -jitter;
+
+      if (jitter > g_periodic_max_jitter)
+        {
+          g_periodic_max_jitter = jitter;
+        }
+    }
+
+  g_periodic_last = now;
+}
+
+static void cmd_callout(void)
+{
+  printf("=== HRT Callout Mechanism Test ===\n\n");
+
+  /* Test 1: One-shot hrt_call_after with 500µs, 1ms, 10ms, 100ms delays */
+  printf("Test 1: One-shot hrt_call_after\n");
+
+  static const int oneshot_delays[] = {500, 1000, 5000, 10000, 100000};
+  const int n_oneshots = 5;
+
+  for (int i = 0; i < n_oneshots; i++)
+    {
+      g_oneshot_count = 0;
+      hrt_call_init(&g_test_oneshot);
+
+      hrt_abstime t0 = hrt_absolute_time();
+      hrt_call_after(&g_test_oneshot, oneshot_delays[i],
+                     oneshot_callback, NULL);
+
+      /* Wait up to 2x the expected delay */
+      int wait_ms = (oneshot_delays[i] / 1000) * 3 + 10;
+      up_mdelay(wait_ms);
+
+      hrt_abstime t1 = hrt_absolute_time();
+
+      if (g_oneshot_count == 1)
+        {
+          printf("  delay=%6d us: PASS (fired in %lld us, waited %d ms)\n",
+                 oneshot_delays[i],
+                 (long long)(t1 - t0),
+                 wait_ms);
+        }
+      else
+        {
+          printf("  delay=%6d us: FAIL (count=%u, expected 1)\n",
+                 oneshot_delays[i], (unsigned)g_oneshot_count);
+        }
+
+      hrt_cancel(&g_test_oneshot);
+    }
+
+  /* Test 2: Periodic hrt_call_every at 1000µs (1ms) — use HRT elapsed as reference */
+  printf("\nTest 2: Periodic hrt_call_every (1000 us period)\n");
+
+  g_periodic_count = 0;
+  g_periodic_last = 0;
+  g_periodic_max_jitter = 0;
+  hrt_call_init(&g_test_periodic);
+
+  hrt_abstime t2_start = hrt_absolute_time();
+
+  hrt_call_every(&g_test_periodic, 1000, 1000,
+                 periodic_callback, NULL);
+
+  up_mdelay(100);
+
+  hrt_cancel(&g_test_periodic);
+
+  hrt_abstime t2_end = hrt_absolute_time();
+  uint32_t count = g_periodic_count;
+  int64_t max_jit = g_periodic_max_jitter;
+  int64_t elapsed_us = (int64_t)(t2_end - t2_start);
+  uint32_t expected = (uint32_t)(elapsed_us / 1000);
+
+  printf("  HRT elapsed: %lld us (up_mdelay(100) is slow on this board)\n",
+         (long long)elapsed_us);
+  printf("  Fired %u times (expected %u based on actual elapsed)\n",
+         (unsigned)count, (unsigned)expected);
+  printf("  Max jitter: %lld us\n", (long long)max_jit);
+
+  if (count == 0)
+    {
+      printf("  Result: CRITICAL FAIL — callout never fired!\n");
+    }
+  else if (count == 1)
+    {
+      printf("  Result: FAIL — fired once then stopped (reschedule bug)\n");
+    }
+  else
+    {
+      int32_t error_pct = (int32_t)((int64_t)(count - expected) * 100 /
+                                    (int64_t)expected);
+
+      if (error_pct >= -10 && error_pct <= 10)
+        printf("  Result: PASS (rate within 10%% of expected)\n");
+      else
+        printf("  Result: MARGINAL (rate error %d%%)\n", (int)error_pct);
+    }
+
+  /* Test 3: Short-period burst — 250µs period (tests rapid CC[0] reprogram) */
+  printf("\nTest 3: Periodic hrt_call_every (250 us period)\n");
+
+  g_periodic_count = 0;
+  g_periodic_last = 0;
+  g_periodic_max_jitter = 0;
+  hrt_call_init(&g_test_periodic);
+
+  hrt_abstime t3_start = hrt_absolute_time();
+
+  hrt_call_every(&g_test_periodic, 250, 250,
+                 periodic_callback, NULL);
+
+  up_mdelay(50);
+
+  hrt_cancel(&g_test_periodic);
+
+  hrt_abstime t3_end = hrt_absolute_time();
+  count = g_periodic_count;
+  max_jit = g_periodic_max_jitter;
+  elapsed_us = (int64_t)(t3_end - t3_start);
+  expected = (uint32_t)(elapsed_us / 250);
+
+  printf("  HRT elapsed: %lld us\n", (long long)elapsed_us);
+  printf("  Fired %u times (expected %u based on actual elapsed)\n",
+         (unsigned)count, (unsigned)expected);
+  printf("  Max jitter: %lld us\n", (long long)max_jit);
+
+  if (count <= 1)
+    printf("  Result: CRITICAL FAIL\n");
+  else
+    {
+      int32_t error_pct = (int32_t)((int64_t)(count - expected) * 100 /
+                                    (int64_t)expected);
+
+      if (error_pct >= -10 && error_pct <= 10)
+        printf("  Result: PASS (rate within 10%%)\n");
+      else
+        printf("  Result: MARGINAL (rate error %d%%)\n", (int)error_pct);
+    }
+
+  printf("\n=== Summary ===\n");
+  printf("If Test 2/3 show CRITICAL FAIL, the TCC0 CC[0] compare-match\n");
+  printf("interrupt is not firing for short-period deadlines.\n");
+  printf("Note: up_mdelay() is ~46%% slow on this board; test uses HRT\n");
+  printf("elapsed time as the reference, not up_mdelay duration.\n");
+}
+
 /* =========================================================================
  * Entry point
  * =========================================================================
@@ -360,6 +540,7 @@ __EXPORT int hrt_test_main(int argc, char *argv[])
       printf("  stress     - Accuracy table across 1..2000 ms\n");
       printf("  cross      - Cross-check HRT vs SysTick over 2 s\n");
       printf("  regs       - Dump SysTick/MCLK/GCLK hardware registers\n");
+      printf("  callout    - Test HRT callout mechanism (one-shot + periodic)\n");
       return 0;
     }
 
@@ -400,6 +581,10 @@ __EXPORT int hrt_test_main(int argc, char *argv[])
   else if (strcmp(argv[1], "regs") == 0)
     {
       cmd_regs();
+    }
+  else if (strcmp(argv[1], "callout") == 0)
+    {
+      cmd_callout();
     }
   else
     {

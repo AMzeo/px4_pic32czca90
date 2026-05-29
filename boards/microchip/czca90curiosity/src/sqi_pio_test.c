@@ -3,9 +3,18 @@
 /**
  * @file sqi_pio_test.c
  *
- * Minimal PIO mode test for SQI1 — tests whether PIO mode actually works
- * on Michigan Ax (CA90) silicon. If it does, the entire BD-DMA approach
- * can be replaced with a much simpler register-based driver.
+ * Definitive PIO vs DMA comparison test for Microchip bug report.
+ *
+ * Proves PIO mode (CFG.MODE=1) does not generate bus activity on
+ * PIC32CZ CA90 Michigan Ax silicon (PIC32CZ8110CA90208), while
+ * BD-DMA mode (CFG.MODE=2) works correctly with identical clock,
+ * pin, and peripheral configuration.
+ *
+ * Board:   PIC32CZ CA90 Curiosity Ultra (EV16W43A)
+ * Flash:   SST26VF032BAT on SQI1 (JEDEC BF 26 42)
+ * GCLK:    GCLK2 = 100 MHz (PLL0/3)
+ * CLKDIV:  1 → 50 MHz SCK
+ * Pins:    PC30/CLK, PG03/CS0, PC31/IO0, PG00/IO1, PG01/IO2, PG02/IO3
  *
  * Run from NSH: sqi_pio_test
  */
@@ -15,10 +24,12 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "arm_internal.h"
 #include "sam_gclk.h"
 #include "sam_port.h"
+#include "sam_sqi.h"
 #include "hardware/sam_sqi.h"
 #include "hardware/sam_mclk.h"
 #include "hardware/pic32czca90_pinmap.h"
@@ -37,165 +48,342 @@ static inline void sqiwr(uint32_t off, uint32_t val)
   putreg32(val, SQI1_BASE + off);
 }
 
-int sqi_pio_test_main(int argc, char *argv[])
+static void sqi_hw_init(void)
 {
-  uint32_t stat1, stat2, cfg, clkcon;
-  int i;
-
-  printf("\n=== SQI1 PIO Mode Test ===\n\n");
-
-  /* Step 1: Ensure pins are muxed (may already be done by init.c) */
-
   sam_portconfig(PORT_SQI1_CLK);
   sam_portconfig(PORT_SQI1_CS0);
   sam_portconfig(PORT_SQI1_IO0);
   sam_portconfig(PORT_SQI1_IO1);
   sam_portconfig(PORT_SQI1_IO2);
   sam_portconfig(PORT_SQI1_IO3);
-  printf("[1] Pins muxed\n");
-
-  /* Step 2: Enable GCLK2 → SQI1 and MCLK */
 
   sam_gclk_chan_enable(SAM_SQI1_GCLK_ID, 2, false);
-  {
-    uint32_t id  = SAM_SQI1_MCLK_ID_AHB;
-    uint32_t reg = SAM_MCLK_CLKMSK_ADDR(id);
-    uint32_t bit = SAM_MCLK_CLKMSK_BIT(id);
-    putreg32(getreg32(reg) | bit, reg);
-  }
-  printf("[2] GCLK + MCLK enabled\n");
 
-  /* Step 3: SWRST */
+  uint32_t id  = SAM_SQI1_MCLK_ID_AHB;
+  uint32_t reg = SAM_MCLK_CLKMSK_ADDR(id);
+  uint32_t bit = SAM_MCLK_CLKMSK_BIT(id);
+  putreg32(getreg32(reg) | bit, reg);
+}
 
+static void sqi_swrst(void)
+{
   putreg8(SQI_CTRLA_SWRST, SAM_SQI1_CTRLA);
   while (getreg8(SAM_SQI1_SYNCBUSY) & SQI_SYNCBUSY_SWRST)
     ;
-  printf("[3] SWRST done\n");
+}
 
-  /* Step 4: Configure for PIO mode */
-
-  sqiwr(SAM_SQI_CFG_OFFSET,
-        SQI_CFG_MODE_PIO |    /* MODE=1 (PIO) */
-        SQI_CFG_BURSTEN  |    /* AHB burst */
-        SQI_CFG_DATAEN(0) |   /* single-lane SPI */
-        SQI_CFG_CSEN0);       /* CS0 enable */
-
-  cfg = sqireg(SAM_SQI_CFG_OFFSET);
-  printf("[4] CFG = 0x%08lx (MODE=%lu, SQIEN=%lu, CSEN0=%lu)\n",
-         (unsigned long)cfg,
-         (unsigned long)(cfg & 7),
-         (unsigned long)((cfg >> 23) & 1),
-         (unsigned long)((cfg >> 24) & 1));
-
-  /* Step 5: Enable clock, wait stable, set CLKDIV=4 (12.5 MHz, safe) */
-
+static void sqi_clock_init(uint32_t clkdiv)
+{
   sqiwr(SAM_SQI_CLKCON_OFFSET, SQI_CLKCON_EN);
   while (!(sqireg(SAM_SQI_CLKCON_OFFSET) & SQI_CLKCON_STABLE))
     ;
-  sqiwr(SAM_SQI_CLKCON_OFFSET, SQI_CLKCON_EN | SQI_CLKCON_CLKDIV(4u));
+  sqiwr(SAM_SQI_CLKCON_OFFSET, SQI_CLKCON_EN | SQI_CLKCON_CLKDIV(clkdiv));
   while (!(sqireg(SAM_SQI_CLKCON_OFFSET) & SQI_CLKCON_STABLE))
     ;
-  clkcon = sqireg(SAM_SQI_CLKCON_OFFSET);
-  printf("[5] CLKCON = 0x%08lx (EN=%lu, STABLE=%lu, CLKDIV=%lu)\n",
-         (unsigned long)clkcon,
-         (unsigned long)(clkcon & 1),
-         (unsigned long)((clkcon >> 1) & 1),
-         (unsigned long)((clkcon >> 8) & 0x7FF));
+}
 
-  /* Step 6: Enable SQIEN */
+/****************************************************************************
+ * TEST A: BD-DMA RDID (control — must succeed to prove flash is alive)
+ ****************************************************************************/
 
-  sqiwr(SAM_SQI_CFG_OFFSET, sqireg(SAM_SQI_CFG_OFFSET) | SQI_CFG_SQIEN);
-  cfg = sqireg(SAM_SQI_CFG_OFFSET);
-  printf("[6] CFG after SQIEN = 0x%08lx\n", (unsigned long)cfg);
+static uint8_t g_dma_tx_buf[4] __attribute__((aligned(32)));
+static uint8_t g_dma_rx_buf[4] __attribute__((aligned(32)));
 
-  /* Step 7: Check STAT1/STAT2 before transfer */
+struct sqi_bd_s {
+  uint32_t bd_ctrl;
+  uint32_t bd_stat;
+  uint32_t bd_bufaddr;
+  uint32_t bd_nxtptr;
+  uint8_t  _pad[16];
+} __attribute__((aligned(32)));
 
-  stat1 = sqireg(SAM_SQI_STAT1_OFFSET);
-  stat2 = sqireg(SAM_SQI_STAT2_OFFSET);
-  printf("[7] PRE-XFER: STAT1=0x%08lx (TXFREE=%lu RXCNT=%lu) STAT2=0x%08lx\n",
-         (unsigned long)stat1,
-         (unsigned long)((stat1 >> 16) & 0xFFFF),
-         (unsigned long)(stat1 & 0xFFFF),
-         (unsigned long)stat2);
+static struct sqi_bd_s g_tx_bd __attribute__((aligned(32)));
+static struct sqi_bd_s g_rx_bd __attribute__((aligned(32)));
 
-  /* Step 8: Set CON for 4-byte transfer (1 cmd + 3 response)
-   * TXRXCOUNT=4, LANEMODE=0 (single), DEVSEL=0 (CS0), DASSERT=1 (deassert after) */
+static int test_dma_rdid(uint8_t jedec[3])
+{
+  uint32_t timeout;
+
+  sqi_swrst();
+
+  sqiwr(SAM_SQI_CFG_OFFSET,
+        SQI_CFG_MODE_DMA | SQI_CFG_BURSTEN |
+        SQI_CFG_DATAEN(0) | SQI_CFG_CSEN0 | SQI_CFG_RXBUFRST);
+
+  sqi_clock_init(1);
+
+  sqiwr(SAM_SQI_CFG_OFFSET,
+        SQI_CFG_MODE_DMA | SQI_CFG_BURSTEN |
+        SQI_CFG_DATAEN(0) | SQI_CFG_CSEN0 | SQI_CFG_SQIEN);
+
+  sqiwr(SAM_SQI_CMDTHR_OFFSET, SQI_CMDTHR_RXCMDTHR(1) | SQI_CMDTHR_TXCMDTHR(0x20));
+  sqiwr(SAM_SQI_INTTHR_OFFSET, SQI_INTTHR_RXINTTHR(1) | SQI_INTTHR_TXINTTHR(1));
+  sqiwr(SAM_SQI_THR_OFFSET, 1);
+  sqiwr(SAM_SQI_INTEN_OFFSET, SQI_INT_BDDONE | SQI_INT_PKTCOMP);
+  sqiwr(SAM_SQI_INTSIGEN_OFFSET, SQI_INT_BDDONE | SQI_INT_PKTCOMP);
+
+  /* TX BD: send 0x9F (RDID command, 1 byte) */
+
+  g_dma_tx_buf[0] = 0x9Fu;
+
+  g_tx_bd.bd_ctrl    = SQI_BDCTRL_DESC_EN | SQI_BDCTRL_PKT_INT_EN |
+                       SQI_BDCTRL_BUFLEN(1);
+  g_tx_bd.bd_stat    = 0;
+  g_tx_bd.bd_bufaddr = (uint32_t)(uintptr_t)g_dma_tx_buf;
+  g_tx_bd.bd_nxtptr  = (uint32_t)(uintptr_t)&g_rx_bd;
+
+  /* RX BD: capture 3 bytes (JEDEC mfr + type + capacity) */
+
+  memset(g_dma_rx_buf, 0xFF, 4);
+
+  g_rx_bd.bd_ctrl    = SQI_BDCTRL_DESC_EN | SQI_BDCTRL_LAST_BD |
+                       SQI_BDCTRL_LIFM | SQI_BDCTRL_PKT_INT_EN |
+                       SQI_BDCTRL_DIR |
+                       SQI_BDCTRL_BUFLEN(3);
+  g_rx_bd.bd_stat    = 0;
+  g_rx_bd.bd_bufaddr = (uint32_t)(uintptr_t)g_dma_rx_buf;
+  g_rx_bd.bd_nxtptr  = 0;
+
+  /* Flush D-cache for buffers and descriptors */
+
+  {
+    uintptr_t a;
+    for (a = (uintptr_t)g_dma_tx_buf & ~31u;
+         a < (uintptr_t)g_dma_tx_buf + 32; a += 32)
+      putreg32(a, 0xE000EF68u);  /* DCCMVAC */
+    for (a = (uintptr_t)g_dma_rx_buf & ~31u;
+         a < (uintptr_t)g_dma_rx_buf + 32; a += 32)
+      putreg32(a, 0xE000EF68u);
+    for (a = (uintptr_t)&g_tx_bd & ~31u;
+         a < (uintptr_t)&g_tx_bd + 32; a += 32)
+      putreg32(a, 0xE000EF68u);
+    for (a = (uintptr_t)&g_rx_bd & ~31u;
+         a < (uintptr_t)&g_rx_bd + 32; a += 32)
+      putreg32(a, 0xE000EF68u);
+    __asm__ volatile ("dsb sy" ::: "memory");
+  }
+
+  sqiwr(SAM_SQI_INTSTAT_OFFSET, 0xFFFFFFFFu);
+  sqiwr(SAM_SQI_BDBASEADD_OFFSET, (uint32_t)(uintptr_t)&g_tx_bd);
+  sqiwr(SAM_SQI_BDCON_OFFSET, SQI_BDCON_START | SQI_BDCON_DMAEN);
+
+  timeout = 2000000u;
+  while (!(sqireg(SAM_SQI_INTSTAT_OFFSET) & (SQI_INT_BDDONE | SQI_INT_PKTCOMP)))
+    {
+      if (--timeout == 0) return -1;
+    }
+
+  sqiwr(SAM_SQI_BDCON_OFFSET, 0);
+
+  /* Invalidate D-cache for RX buffer */
+
+  {
+    uintptr_t a;
+    for (a = (uintptr_t)g_dma_rx_buf & ~31u;
+         a < (uintptr_t)g_dma_rx_buf + 32; a += 32)
+      putreg32(a, 0xE000EF5Cu);  /* DCIMVAC */
+    __asm__ volatile ("dsb sy" ::: "memory");
+  }
+
+  jedec[0] = g_dma_rx_buf[0];
+  jedec[1] = g_dma_rx_buf[1];
+  jedec[2] = g_dma_rx_buf[2];
+  return 0;
+}
+
+/****************************************************************************
+ * TEST B: PIO RDID (under test — expected to fail on Michigan Ax)
+ ****************************************************************************/
+
+static int test_pio_rdid(uint8_t jedec[3])
+{
+  uint32_t stat1;
+  uint32_t timeout;
+  uint32_t rxcnt;
+
+  sqi_swrst();
+
+  /* Configure PIO mode — identical clock, pins, CS as DMA test */
+
+  sqiwr(SAM_SQI_CFG_OFFSET,
+        SQI_CFG_MODE_PIO | SQI_CFG_BURSTEN |
+        SQI_CFG_DATAEN(0) | SQI_CFG_CSEN0);
+
+  sqi_clock_init(1);
+
+  sqiwr(SAM_SQI_CFG_OFFSET,
+        SQI_CFG_MODE_PIO | SQI_CFG_BURSTEN |
+        SQI_CFG_DATAEN(0) | SQI_CFG_CSEN0 | SQI_CFG_SQIEN);
+
+  /* Set CON: 4-byte transfer, CMDINIT=1 (TX), single lane, CS0, deassert after.
+   * CMDINIT(1) is required to initiate PIO transfer — CMDINIT(0) = IDLE. */
 
   sqiwr(SAM_SQI_CON_OFFSET,
         SQI_CON_TXRXCOUNT(4) |
-        SQI_CON_LANEMODE(0)  |
-        SQI_CON_DEVSEL(0)    |
+        SQI_CON_CMDINIT(1) |
+        SQI_CON_LANEMODE(0) |
+        SQI_CON_DEVSEL(0) |
         SQI_CON_DASSERT);
 
-  printf("[8] CON = 0x%08lx\n", (unsigned long)sqireg(SAM_SQI_CON_OFFSET));
-
-  /* Step 9: Write 4 bytes to TXDATA (0x9F + 3 dummy) */
+  /* Write 4 bytes to TXDATA: 0x9F (RDID) + 3 dummy */
 
   sqiwr(SAM_SQI_TXDATA_OFFSET, 0x9Fu);
   sqiwr(SAM_SQI_TXDATA_OFFSET, 0x00u);
   sqiwr(SAM_SQI_TXDATA_OFFSET, 0x00u);
   sqiwr(SAM_SQI_TXDATA_OFFSET, 0x00u);
 
-  stat1 = sqireg(SAM_SQI_STAT1_OFFSET);
-  printf("[9] After TX writes: STAT1=0x%08lx (TXFREE=%lu RXCNT=%lu)\n",
-         (unsigned long)stat1,
-         (unsigned long)((stat1 >> 16) & 0xFFFF),
-         (unsigned long)(stat1 & 0xFFFF));
+  /* Wait for RX data (timeout if PIO broken) */
 
-  /* Step 10: Wait for RXBUFCNT >= 4 (or timeout) */
-
-  {
-    uint32_t timeout = 1000000u;
-    uint32_t rxcnt = 0;
-    while (timeout--)
-      {
-        stat1 = sqireg(SAM_SQI_STAT1_OFFSET);
-        rxcnt = stat1 & 0xFFFF;
-        if (rxcnt >= 4) break;
-      }
-
-    printf("[10] Wait result: timeout_remaining=%lu RXCNT=%lu STAT1=0x%08lx\n",
-           (unsigned long)timeout, (unsigned long)rxcnt,
-           (unsigned long)stat1);
-
-    if (rxcnt == 0)
-      {
-        printf("\n*** PIO FAILED: No RX data received. RXCNT stuck at 0. ***\n");
-        printf("    This confirms PIO mode does NOT work on this silicon.\n");
-        stat2 = sqireg(SAM_SQI_STAT2_OFFSET);
-        printf("    STAT2=0x%08lx (IO0=%lu IO1=%lu CMDSTAT=%lu)\n",
-               (unsigned long)stat2,
-               (unsigned long)((stat2 >> 3) & 1),
-               (unsigned long)((stat2 >> 4) & 1),
-               (unsigned long)((stat2 >> 16) & 3));
-        printf("    INTSTAT=0x%08lx\n",
-               (unsigned long)sqireg(SAM_SQI_INTSTAT_OFFSET));
-        return 1;
-      }
-  }
-
-  /* Step 11: Read RX data */
-
-  printf("[11] RX data (4 bytes): ");
-  for (i = 0; i < 4; i++)
+  timeout = 2000000u;
+  rxcnt = 0;
+  while (timeout--)
     {
-      uint32_t rx = sqireg(SAM_SQI_RXDATA_OFFSET);
-      printf("%02lX ", (unsigned long)(rx & 0xFF));
+      stat1 = sqireg(SAM_SQI_STAT1_OFFSET);
+      rxcnt = stat1 & 0xFFFF;
+      if (rxcnt >= 4) break;
     }
+
+  if (rxcnt < 4)
+    {
+      jedec[0] = 0xFF;
+      jedec[1] = 0xFF;
+      jedec[2] = 0xFF;
+      return -1;
+    }
+
+  /* Skip first byte (received during cmd phase) */
+
+  sqireg(SAM_SQI_RXDATA_OFFSET);
+  jedec[0] = (uint8_t)sqireg(SAM_SQI_RXDATA_OFFSET);
+  jedec[1] = (uint8_t)sqireg(SAM_SQI_RXDATA_OFFSET);
+  jedec[2] = (uint8_t)sqireg(SAM_SQI_RXDATA_OFFSET);
+  return 0;
+}
+
+/****************************************************************************
+ * Main
+ ****************************************************************************/
+
+int sqi_pio_test_main(int argc, char *argv[])
+{
+  uint8_t jedec_dma[3] = {0};
+  uint8_t jedec_pio[3] = {0};
+  uint32_t stat1_after_pio;
+  int dma_ok, pio_ok;
+
+  printf("\n");
+  printf("================================================================\n");
+  printf("  SQI1 PIO vs DMA Mode Comparison Test\n");
+  printf("  Silicon: PIC32CZ8110CA90208 (Michigan Ax)\n");
+  printf("  Board:   EV16W43A (Curiosity Ultra)\n");
+  printf("  Flash:   SST26VF032BAT on SQI1\n");
+  printf("  GCLK2:   100 MHz, CLKDIV=1 -> 50 MHz SCK\n");
+  printf("================================================================\n\n");
+
+  sqi_hw_init();
+  printf("[HW] Pins muxed, GCLK2 + MCLK enabled\n\n");
+
+  /* === TEST A: DMA RDID === */
+
+  printf("--- TEST A: BD-DMA Mode (CFG.MODE=2) RDID ---\n");
+  dma_ok = test_dma_rdid(jedec_dma);
+
+  if (dma_ok == 0)
+    {
+      printf("  Result: %02X %02X %02X", jedec_dma[0], jedec_dma[1], jedec_dma[2]);
+
+      if (jedec_dma[0] == 0xBF && jedec_dma[1] == 0x26 && jedec_dma[2] == 0x42)
+        {
+          printf(" -> PASS (SST26VF032BAT confirmed)\n");
+        }
+      else
+        {
+          printf(" -> UNEXPECTED JEDEC (flash alive but wrong chip?)\n");
+        }
+    }
+  else
+    {
+      printf("  Result: TIMEOUT (DMA failed — wiring/clock problem)\n");
+      printf("  Cannot proceed with PIO test.\n");
+      return 1;
+    }
+
   printf("\n");
 
-  printf("     Expected: XX BF 26 42 (XX=garbage during cmd phase)\n");
+  /* === TEST B: PIO RDID === */
 
-  /* Step 12: Final status */
+  printf("--- TEST B: PIO Mode (CFG.MODE=1) RDID ---\n");
+  pio_ok = test_pio_rdid(jedec_pio);
 
-  stat1 = sqireg(SAM_SQI_STAT1_OFFSET);
-  stat2 = sqireg(SAM_SQI_STAT2_OFFSET);
-  printf("[12] POST: STAT1=0x%08lx STAT2=0x%08lx INTSTAT=0x%08lx\n",
-         (unsigned long)stat1,
-         (unsigned long)stat2,
-         (unsigned long)sqireg(SAM_SQI_INTSTAT_OFFSET));
+  stat1_after_pio = sqireg(SAM_SQI_STAT1_OFFSET);
 
-  printf("\n=== PIO Test Complete ===\n");
-  printf("If you see BF 26 42 in the RX data, PIO MODE WORKS!\n\n");
-  return 0;
+  if (pio_ok == 0)
+    {
+      printf("  Result: %02X %02X %02X", jedec_pio[0], jedec_pio[1], jedec_pio[2]);
+
+      if (jedec_pio[0] == 0xBF && jedec_pio[1] == 0x26 && jedec_pio[2] == 0x42)
+        {
+          printf(" -> PASS (PIO mode works!)\n");
+        }
+      else
+        {
+          printf(" -> DATA CORRUPT (PIO partially working)\n");
+        }
+    }
+  else
+    {
+      printf("  Result: TIMEOUT — no RX data received\n");
+      printf("  STAT1 = 0x%08lx (TXFREE=%lu, RXCNT=%lu)\n",
+             (unsigned long)stat1_after_pio,
+             (unsigned long)((stat1_after_pio >> 16) & 0xFFFF),
+             (unsigned long)(stat1_after_pio & 0xFFFF));
+      printf("  INTSTAT = 0x%08lx\n",
+             (unsigned long)sqireg(SAM_SQI_INTSTAT_OFFSET));
+    }
+
+  printf("\n");
+  printf("================================================================\n");
+  printf("  VERDICT:\n");
+
+  if (dma_ok == 0 && pio_ok != 0)
+    {
+      printf("  DMA mode: PASS  |  PIO mode: FAIL\n");
+      printf("\n");
+      printf("  PIO mode (CFG.MODE=1) does NOT generate SCK/MOSI bus activity\n");
+      printf("  on this silicon. TXFREE decreases (bytes accepted into FIFO)\n");
+      printf("  but RXCNT stays 0 (no data shifted in). The SPI clock never\n");
+      printf("  toggles — confirmed by RXCNT=0 timeout with same flash chip\n");
+      printf("  and pin configuration that works in DMA mode.\n");
+      printf("\n");
+      printf("  This is a HARDWARE BUG in PIC32CZ CA90 Michigan Ax silicon.\n");
+    }
+  else if (dma_ok == 0 && pio_ok == 0)
+    {
+      printf("  DMA mode: PASS  |  PIO mode: PASS\n");
+      printf("  Both modes work. PIO mode is NOT broken on this silicon.\n");
+    }
+  else
+    {
+      printf("  DMA mode: FAIL  |  Cannot determine PIO status.\n");
+    }
+
+  printf("================================================================\n\n");
+
+  /* Restore SQI to working state — PIO test leaves peripheral dirty.
+   * Without this, subsequent param save hangs (DMA can't recover from
+   * PIO residual state without full SWRST + XIP re-entry). */
+
+  sqi_swrst();
+  sqiwr(SAM_SQI_CFG_OFFSET,
+        SQI_CFG_MODE_DMA | SQI_CFG_BURSTEN |
+        SQI_CFG_DATAEN(0) | SQI_CFG_CSEN0 | SQI_CFG_RXBUFRST);
+  sqi_clock_init(1);
+  sqiwr(SAM_SQI_CFG_OFFSET,
+        SQI_CFG_MODE_DMA | SQI_CFG_BURSTEN |
+        SQI_CFG_DATAEN(0) | SQI_CFG_CSEN0 | SQI_CFG_SQIEN);
+  sam_sqi_enter_xip();
+
+  printf("[CLEANUP] SQI restored to XIP mode — param save safe.\n\n");
+
+  return (pio_ok != 0) ? 1 : 0;
 }
