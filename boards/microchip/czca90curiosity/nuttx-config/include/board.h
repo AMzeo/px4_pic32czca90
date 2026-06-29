@@ -55,7 +55,7 @@
 #define BOARD_GCLK4_FREQUENCY    (BOARD_DPLL0_FREQUENCY / 3)    /* 100 MHz — SDMMC1 main */
 #define BOARD_GCLK5_FREQUENCY    (BOARD_DPLL0_FREQUENCY / 25)   /* 12 MHz — SDMMC1 slow */
 #define BOARD_GCLK6_FREQUENCY    0                              /* Disabled */
-#define BOARD_GCLK7_FREQUENCY    0
+#define BOARD_GCLK7_FREQUENCY    (BOARD_DPLL0_FREQUENCY / 3)    /* 100 MHz — TCC1/TCC7 PWM */
 #define BOARD_GCLK8_FREQUENCY    0
 #define BOARD_GCLK9_FREQUENCY    0
 #define BOARD_GCLK10_FREQUENCY   0
@@ -170,7 +170,7 @@
 #define BOARD_GCLK5_SOURCE       6         /* PLL0_1 = 300 MHz */
 #define BOARD_GCLK5_DIV          25        /* 300 / 25 = 12 MHz */
 
-/* GCLK6-11 - disabled */
+/* GCLK6-11 - disabled (except GCLK7 for PWM) */
 
 #define BOARD_GCLK6_ENABLE       FALSE
 #define BOARD_GCLK6_OOV          FALSE
@@ -179,12 +179,14 @@
 #define BOARD_GCLK6_SOURCE       1
 #define BOARD_GCLK6_DIV          1
 
-#define BOARD_GCLK7_ENABLE       FALSE
+/* GCLK7 - 100 MHz from PLL0/3 → TCC1 (PCHCTRL[32]) + TCC7 (PCHCTRL[38]) PWM */
+
+#define BOARD_GCLK7_ENABLE       TRUE
 #define BOARD_GCLK7_OOV          FALSE
 #define BOARD_GCLK7_OE           FALSE
 #define BOARD_GCLK7_RUNSTDBY     FALSE
-#define BOARD_GCLK7_SOURCE       1
-#define BOARD_GCLK7_DIV          1
+#define BOARD_GCLK7_SOURCE       6         /* PLL0_1 = 300 MHz */
+#define BOARD_GCLK7_DIV          3         /* 300 / 3 = 100 MHz */
 
 #define BOARD_GCLK8_ENABLE       FALSE
 #define BOARD_GCLK8_OOV          FALSE

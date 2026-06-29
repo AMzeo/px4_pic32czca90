@@ -186,10 +186,6 @@ void PWMOut::Run()
 		update_params();
 	}
 
-	// SAMV7: Disable work queue switch to avoid re-entrancy crash.
-	// ScheduleNow() immediately triggers Run() on rate_ctrl before the first
-	// updateSubscriptions() completes. Pass false to skip work queue switch
-	// while still setting up function assignments and scheduling.
 #if defined(CONFIG_ARCH_CHIP_SAMV7)
 	_mixing_output.updateSubscriptions(false);
 #else

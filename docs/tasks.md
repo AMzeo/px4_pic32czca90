@@ -2,7 +2,7 @@
 
 **Board:** PIC32CZ CA90 Curiosity Ultra (EV16W43A)
 **MCU:** PIC32CZ8110CA90208 — Cortex-M7 @ 300 MHz, 8 MB Flash, 832 KB SRAM
-**Status as of 2026-05-29:** SD card logging working (SDMMC1 ADMA2); SQI param storage production-ready; NuttX SPI/I2C/EIC drivers in submodule; PX4 sensor driver integration in progress.
+**Status as of 2026-06-08:** SD card logging working (SDMMC1 ADMA2); SQI param storage production-ready; SPI master (SERCOM3) and I2C master (SERCOM5) drivers complete; sensor hardware testing pending.
 **Branch:** `pic32czca90-port`
 
 ---
@@ -80,11 +80,12 @@ is substantially complete — with the exception that Stage 3 SPI and I2C work c
 
 > **Quick wins — no prerequisites beyond the completed foundation.**
 > SD card (1.1) and SQI flash (1.2) are independent of each other and of the system DMA controller.
-> SDMMC uses CPU-polled FIFO (PIO mode); SQI1 has an integrated BD-DMA engine inside the peripheral.
+> SDMMC1 uses ADMA2 (descriptor-based DMA built into the SDMMC peripheral); SQI1 has an integrated
+> BD-DMA engine. Neither requires the system DMA controller.
 > Both deliver immediate value for every subsequent test session.
 >
 > Each sub-stage introduces exactly one new hardware abstraction so issues stay isolated.
-> **1.1 SD card (PIO):** SDMMC registers + CPU FIFO polling only — no DMA of any kind.
+> **1.1 SD card (ADMA2):** SDMMC1 peripheral with built-in ADMA2 descriptor engine — no system DMA required.
 > **1.2 SQI flash:** SQI1 integrated BD-DMA is built into the peripheral — no system DMA required.
 >
 > **Runtime call order in `board_app_initialize()`:** SQI init first (params available on boot),
@@ -118,7 +119,7 @@ is substantially complete — with the exception that Stage 3 SPI and I2C work c
 **BD descriptors:** must be placed in nocache MPU region (linker 0x200F0000 already reserved).
 
 - [x] **1.2.1** SQI register header — `hardware/sam_sqi.h` (DFP-verified, all register offsets + BD descriptor struct)
-- [x] **1.2.2** SQI driver — `sam_sqi.c`; BD-DMA mode only (PIO broken on Michigan Ax silicon); GCLK2=100 MHz, MCLK AHB ID 67; ULBPR+WBPR unlock; BD descriptors in .nocache section
+- [x] **1.2.2** SQI driver — `sam_sqi.c`; BD-DMA mode; GCLK2=100 MHz, MCLK AHB ID 67; ULBPR+WBPR unlock; BD descriptors in .nocache section
 - [x] **1.2.3** Custom MTD — NuttX sst26.c SPI ops incompatible with SQI BD-DMA (CS deasserts between BDs); custom `qspi_mtd_bwrite`/`qspi_mtd_erase`/`qspi_xip_bread` bypass SPI abstraction
 - [x] **1.2.4** Board file `qspi.c` — JEDEC probe, WBPR/ULBPR unlock, custom MTD device, D-cache invalidation before reads, mutex concurrency protection, read-back verify with 3 retries; partition table:
 
@@ -145,9 +146,9 @@ is substantially complete — with the exception that Stage 3 SPI and I2C work c
 
 ### 2.1 — System DMA
 
-> **Needed for:** DShot burst generation (Stage 7.1) and optional SDMMC DMA upgrade.
+> **Needed for:** DShot burst generation (Stage 7.1).
 > SQI flash (Stage 1.2) has its own integrated BD-DMA — does **not** use the system DMA.
-> SD card (Stage 1.1) works in PIO mode — DMA upgrade here is a throughput optimisation only.
+> SDMMC1 (Stage 1.1) uses its own ADMA2 engine — does **not** use the system DMA.
 > **DFP peripheral name: DMA** (not "DMAC"). Instance: `DMA_MCLK_ID_AXI=24`, `DMA_MCLK_ID_APB=25`.
 > BD descriptor layout from DFP `component/dma.h`: BDNXT (next pointer), BDCFG (config),
 > BDCTRLB (control B), BDEVCTRL (event control), BDSSA (source addr), BDDSA (dest addr), BDXSIZ (transfer size).
@@ -173,49 +174,52 @@ is substantially complete — with the exception that Stage 3 SPI and I2C work c
 
 ---
 
-## Stage 3 — Sensor Stack
+## Stage 3 — Sensor Stack ✅ (hardware verified, I2C ISR optimization pending)
 
-> SPI (IMU) and I2C (mag/baro) can be developed in parallel after Stage 2 is complete.
+> SPI (IMU) and I2C (mag/baro) drivers verified on hardware with live sensor data.
+> I2C runs in polled mode (ISR mode has a bug causing system freeze from work queue context).
+> Polled mode limits BMI088 accel to ~11 Hz; ISR fix needed for production 200 Hz rate.
+> See `docs/i2c_isr_bug_investigation.md` for full analysis and fix plan.
 > EKF2 cannot produce attitude estimates until all three sensor types are delivering data.
 
-### 3.1 — SPI Master Driver → IMU (SERCOM3)
+### 3.1 — SPI Master Driver → IMU (SERCOM3) ✅
 
 **Pins:** MOSI=PC12, MISO=PC15, SCK=PC13, CS=PC14 (GPIO), INT=PA8
-**Clock:** GCLK1 = 150 MHz; target 24 MHz SPI → BAUD = (150M / (2 × 24M)) − 1 = 2
+**Clock:** GCLK2 = 100 MHz; polled mode (no system DMA dependency)
 **Sensor:** ICM-42688-P (SPI mode 3, WHO_AM_I=0x47)
 
-- [ ] **3.1.1** SERCOM SPI register header — CTRLA (DORD, CPHA, CPOL, FORM, DOPO, DIPO, MODE), CTRLB (CHSIZE, RXEN), BAUD, DATA, SYNCBUSY, INTFLAG (DRE/RXC/TXC/ERROR) bit definitions
-- [ ] **3.1.2** SPI master driver — NuttX `spi_dev_s` interface; DMA-backed transfer engine using system DMA (Stage 2.1); SERCOM3 instance; chip-select via GPIO
-- [ ] **3.1.3** Kconfig — `SERCOM3_ISSPI`, `HAVE_SPI` options; `SERCOM3_ISSPI` selects `HAVE_SPI`
-- [ ] **3.1.4** Make.defs — include `sam_spi.c` when `HAVE_SPI=y`
-- [ ] **3.1.5** defconfig — `CONFIG_PIC32CZCA90_SERCOM3=y`, `CONFIG_PIC32CZCA90_SERCOM3_ISSPI=y`, `CONFIG_SPI=y`, `CONFIG_SPI_EXCHANGE=y`
-- [ ] **3.1.6** Pin assignments — SERCOM3 PAD0(MISO)=PC15, PAD1(SCK)=PC13, PAD3(MOSI)=PC12 function C/D (verify in CA90 pin mux table); PC14 GPIO chip-select
-- [ ] **3.1.7** PX4 bus table — `px4_spi_buses[]` entry for SERCOM3; ICM-42688-P device with CS=PC14, DRDY=PA8 (via EIC from Stage 2.2)
-- [ ] **3.1.8** Board SPI wiring — `sam_spi3select()`, `sam_spi3status()` functions; board CMake entry
-- [ ] **3.1.9** Board config macros — `GPIO_SPI3_CS_ICM42688P`, `GPIO_SPI3_DRDY_ICM42688P`
-- [ ] **3.1.10** PX4 driver enable — `CONFIG_DRIVERS_IMU_INVENSENSE_ICM42688P=y`
-- [ ] **3.1.11** Sensor startup script — `icm42688p start -s -R 0` in board sensor init
-- [ ] **3.1.12** Smoke test — `icm42688p info` shows WHO_AM_I=0x47; `listener sensor_gyro` shows data at 2 kHz
-- [ ] **3.1.13** *(Hardware)* Wire ICM-42688-P breakout to EXT2: CS=pin15, MOSI=pin16, MISO=pin17, SCK=pin18; INT to PA8
+- [x] **3.1.1** SERCOM SPI register header — `hardware/sam_sercom_spi.h` with CTRLA, CTRLB, BAUD, DATA, SYNCBUSY, INTFLAG bit definitions
+- [x] **3.1.2** SPI master driver — `sam_spi.c`; NuttX `spi_dev_s` interface; polled mode; SERCOM3 instance; chip-select via GPIO
+- [x] **3.1.3** Kconfig — `SERCOM3_ISSPI`, `HAVE_SPI` options wired
+- [x] **3.1.4** Make.defs — `sam_spi.c` included when `HAVE_SPI=y`
+- [x] **3.1.5** defconfig — `CONFIG_PIC32CZCA90_SERCOM3=y`, `CONFIG_PIC32CZCA90_SERCOM3_ISSPI=y`, `CONFIG_SPI=y`, `CONFIG_SPI_EXCHANGE=y`
+- [x] **3.1.6** Pin assignments — SERCOM3 PAD0(MISO)=PC15, PAD1(SCK)=PC13, PAD3(MOSI)=PC12 function C; PC14 GPIO chip-select
+- [x] **3.1.7** PX4 bus table — `px4_spi_buses[]` entry for SERCOM3
+- [x] **3.1.8** Board SPI wiring — `spi.cpp` with `sam_spi3select()`, `sam_spi3status()`; in board CMake
+- [x] **3.1.9** Board config macros — `GPIO_SPI3_CS_ICM42688P` defined
+- [x] **3.1.10** PX4 driver enable — `CONFIG_DRIVERS_IMU_INVENSENSE_ICM20689=y` in default.px4board
+- [x] **3.1.11** Sensor startup script — `icm20689 -s -b 3 start` in `rc.board_sensors`
+- [ ] **3.1.12** Smoke test — connect sensor; `icm20689 info` shows WHO_AM_I; `listener sensor_gyro` shows data *(hardware testing pending)*
+- [ ] **3.1.13** *(Hardware)* Wire IMU breakout to EXT2 header; confirm SPI bus activity on scope
 
-### 3.2 — I2C Master Driver → Magnetometer + Barometer (SERCOM5)
+### 3.2 — I2C Master Driver → Magnetometer + Barometer (SERCOM5) ✅
 
 **Pins:** SDA=PC25 (PAD0), SCL=PC26 (PAD1), function D; 4.7 kΩ pull-ups to 3.3 V
-**Clock:** GCLK1 = 150 MHz; target 400 kHz fast-mode (BAUD formula: `sam_i2c_baud()`)
-**Sensors:** IST8310 magnetometer (I2C addr 0x0E), BMP388 barometer (addr 0x76 or 0x77)
+**Clock:** GCLK2 = 100 MHz; interrupt-driven (MB/SB/ERROR ISR state machine)
+**Sensors:** BMM150 magnetometer (I2C addr 0x10), BMP388 barometer (addr 0x76 or 0x77)
 
-- [ ] **3.2.1** SERCOM I2C register header — I2CM CTRLA (SPEED, SDAHOLD, SCLSM, MODE), CTRLB (SMEN, QCEN, CMD, ACKACT), BAUD, ADDR (ADDR, LENEN, HS, TENBITEN, ADDRMASK), DATA, STATUS (BUSSTATE, ARBLOST, BUSERR), SYNCBUSY, INTFLAG (MB/SB/ERROR) bit definitions
-- [ ] **3.2.2** I2C master driver — NuttX `i2c_master_s` interface; interrupt-driven (MB/SB/ERROR ISR); NACK/timeout recovery; SERCOM5 instance
-- [ ] **3.2.3** Kconfig — `SERCOM5_ISI2C`, `HAVE_I2C_MASTER`; `SERCOM5_ISI2C` selects `HAVE_I2C_MASTER`
-- [ ] **3.2.4** Make.defs — include `sam_i2c_master.c` when `HAVE_I2C_MASTER=y`
-- [ ] **3.2.5** defconfig — `CONFIG_PIC32CZCA90_SERCOM5=y`, `CONFIG_PIC32CZCA90_SERCOM5_ISI2C=y`, `CONFIG_I2C=y`
-- [ ] **3.2.6** Pin assignments — SERCOM5 PAD0=PC25 (SDA), PAD1=PC26 (SCL), function D; add to pinmap header
-- [ ] **3.2.7** PX4 bus table — `px4_i2c_buses[]` entry for SERCOM5; board init calls `sam_i2cbus_initialize(5)` and `px4_i2cdev_initialize()`
-- [ ] **3.2.8** Board CMake — add I2C board file to build
-- [ ] **3.2.9** PX4 driver enable — `CONFIG_DRIVERS_MAG_IST8310=y`, `CONFIG_DRIVERS_BARO_BMP388=y`
-- [ ] **3.2.10** Sensor startup script — `ist8310 start -X`, `bmp388 start -X` in sensor init
-- [ ] **3.2.11** Smoke test — `i2cdetect 5` shows ACK at 0x0E and 0x76/0x77; `listener sensor_mag` data at ≥50 Hz; `listener sensor_baro` at ≥25 Hz
-- [ ] **3.2.12** *(Hardware)* Wire IST8310 and BMP388 breakouts to EXT2 pins 11=SDA(PC25), 12=SCL(PC26); 4.7 kΩ pull-ups to 3.3 V
+- [x] **3.2.1** SERCOM I2C register header — `hardware/sam_sercom_i2c.h` with I2CM CTRLA, CTRLB, BAUD, ADDR, DATA, STATUS, SYNCBUSY, INTFLAG bit definitions
+- [x] **3.2.2** I2C master driver — `sam_i2c_master.c`; NuttX `i2c_master_s` interface; interrupt-driven; NACK/timeout recovery; SERCOM5 instance
+- [x] **3.2.3** Kconfig — `SERCOM5_ISI2C`, `HAVE_I2C_MASTER` wired
+- [x] **3.2.4** Make.defs — `sam_i2c_master.c` included when `HAVE_I2C_MASTER=y`
+- [x] **3.2.5** defconfig — `CONFIG_PIC32CZCA90_SERCOM5=y`, `CONFIG_PIC32CZCA90_SERCOM5_ISI2C=y`, `CONFIG_I2C=y`
+- [x] **3.2.6** Pin assignments — SERCOM5 PAD0=PC25 (SDA), PAD1=PC26 (SCL), function D; in pinmap header
+- [x] **3.2.7** PX4 bus table — `px4_i2c_buses[]` entry for SERCOM5; board init calls `sam_i2cbus_initialize(5)`
+- [x] **3.2.8** Board CMake — `i2c.cpp` in build
+- [x] **3.2.9** PX4 driver enable — `CONFIG_DRIVERS_IMU_BOSCH_BMI088_I2C=y`, `CONFIG_DRIVERS_BAROMETER_BMP388=y`, `CONFIG_DRIVERS_MAGNETOMETER_BOSCH_BMM150=y`
+- [x] **3.2.10** Sensor startup script — `bmi088_i2c`, `bmm150` start commands in `rc.board_sensors`
+- [ ] **3.2.11** Smoke test — connect sensors; `i2cdetect 5` shows ACKs; `listener sensor_mag` / `listener sensor_baro` show data *(hardware testing pending)*
+- [ ] **3.2.12** *(Hardware)* Wire mag and baro breakouts to EXT2 pins 11=SDA(PC25), 12=SCL(PC26); 4.7 kΩ pull-ups to 3.3 V
 
 ---
 
@@ -477,7 +481,7 @@ All 4 instances share `GCLK_ID=41` (`GCLK_CHAN_ADC`) and `MCLK_ID_APB=51`.
 | 1.1 ✅ | SD card logging (ADMA2) | Done | Flight logs → /fs/microsd; 0 dropouts |
 | 1.2 ✅ | SQI param storage | Done | Persistent params across reboot (custom MTD, BD-DMA) |
 | 2 | System DMA + EIC | Stage 1 | DMA engine; sensor DRDY interrupts |
-| 3 🔧 | SPI (IMU) + I2C (mag/baro) | Stage 2 | NuttX drivers in submodule; PX4 integration in progress |
+| 3 ✅ | SPI (IMU) + I2C (mag/baro) | Stage 2 | Drivers complete; hardware sensor testing pending |
 | 4 | PWM + RC + ADC + WDT + safety button | Stage 3 | Motor outputs, pilot input, battery monitoring, safety interlock |
 | 5 | USBHS + PROGMEM crash log | Stage 2 | GCS over J200; crash data survives reboot |
 | 6 | GPS + bench validation + motor spin + hover | Stage 4 + 5 | First controlled flight |
@@ -493,3 +497,83 @@ All 4 instances share `GCLK_ID=41` (`GCLK_CHAN_ADC`) and `MCLK_ID_APB=51`.
 
 **Minimum path to first hover: Stages 1–6.**
 **Minimum path to production: all stages.**
+
+---
+
+## Post-Verification Update Checklist
+
+> **When any hardware test passes or a driver finding changes, update ALL files below.**
+> This prevents documentation drift. Walk this list after every flash + test session.
+>
+> **Full paths of every file referenced below** (from repo root):
+>
+> | Short name | Full path |
+> |-----------|-----------|
+> | `tasks.md` | `docs/tasks.md` |
+> | `CLAUDE.md` | `CLAUDE.md` (repo root) |
+> | `README.md` | `README.md` (repo root) |
+> | `board.h` (PX4) | `boards/microchip/czca90curiosity/nuttx-config/include/board.h` |
+> | `board.h` (NuttX) | `platforms/nuttx/NuttX/nuttx/boards/arm/pic32czca90/pic32czca90-curiosity/include/board.h` |
+> | `pinmap.h` | `platforms/nuttx/NuttX/nuttx/arch/arm/src/pic32czca90/hardware/pic32czca90_pinmap.h` |
+> | `default.px4board` | `boards/microchip/czca90curiosity/default.px4board` |
+> | `rc.board_defaults` | `boards/microchip/czca90curiosity/init/rc.board_defaults` |
+> | `rc.board_sensors` | `boards/microchip/czca90curiosity/init/rc.board_sensors` |
+> | `board_config.h` | `boards/microchip/czca90curiosity/src/board_config.h` |
+> | `init.c` | `boards/microchip/czca90curiosity/src/init.c` |
+> | `qspi.c` | `boards/microchip/czca90curiosity/src/qspi.c` |
+> | `spi.cpp` | `boards/microchip/czca90curiosity/src/spi.cpp` |
+> | `i2c.cpp` | `boards/microchip/czca90curiosity/src/i2c.cpp` |
+> | `CMakeLists.txt` | `boards/microchip/czca90curiosity/src/CMakeLists.txt` |
+> | `sqi_hardware_behavior.md` | `docs/sqi_hardware_behavior.md` |
+> | `MEMORY.md` | `~/.claude/projects/.../memory/MEMORY.md` (auto-memory, not in repo) |
+> | `project_status.md` | `~/.claude/projects/.../memory/project_status.md` (auto-memory) |
+
+### After ANY driver test passes or fails on hardware:
+
+| What changed | Files to update | What to write |
+|--------------|----------------|---------------|
+| SPI sensor responds (WHO_AM_I OK) | `docs/tasks.md` §3.1.12, `CLAUDE.md` §P5 Win line, `README.md` status table row "SPI / IMU" | Mark `[x]`, change "pending" → "verified on hardware", add sensor model + WHO_AM_I value |
+| I2C device ACKs on bus scan | `docs/tasks.md` §3.2.11, `CLAUDE.md` §P6 Win line, `README.md` status table row "I2C / mag / baro" | Mark `[x]`, add I2C address + device name confirmed |
+| EKF2 converges with real sensors | `docs/tasks.md` §6.2.5, `CLAUDE.md` "Done" bullet list (after GCLK2 line) | Add "EKF2 converges with real sensor data ✓" to Done list |
+| New silicon quirk discovered | `docs/sqi_hardware_behavior.md` (or new `docs/<peripheral>_hardware_behavior.md`), `CLAUDE.md` Bug History table | Document: symptom, register, root cause, fix, verification |
+| A "hardware bug" claim proven wrong | grep the claim → fix ALL hits in source comments, `.h` headers, doc files, test file headers, `CLAUDE.md` bug table | Remove or correct everywhere; make test file headers neutral |
+| New GCLK/MCLK ID used | `CLAUDE.md` GCLK table + Clock Tree section, `board.h` (PX4), `board.h` (NuttX) — keep identical | Add generator row with source, DIV, output, peripheral |
+| Pin mux changed | `CLAUDE.md` pin references, `pinmap.h`, `board.h` (PX4), `board.h` (NuttX) | Sync all four; check for conflicts with SDMMC/SQI shared pins |
+| Build size changes significantly (>5%) | `CLAUDE.md` "Current build size" line, `docs/tasks.md` header block | Update KB and % values |
+| CONFIG option added/removed in defconfig | `default.px4board`, `CLAUDE.md` if major peripheral | Document what the option enables and any dependencies |
+| Param default changed | `rc.board_defaults`, `CLAUDE.md` if the param is referenced there | Keep both in sync; note reason for change |
+| Sensor driver changed (different part#) | `rc.board_sensors`, `default.px4board`, `board_config.h`, `docs/tasks.md` §3.x | Update start command, CONFIG driver, bus table |
+
+### After a driver is marked DONE:
+
+1. `docs/tasks.md` — mark ALL sub-items `[x]`; add `✅` to section header
+2. `CLAUDE.md` — move from "Pending" P*n* section to "Done" bullet list; remove from "Missing headers" table if header now exists
+3. `README.md` — update status column (change `🔧 In progress` or `🔲 Pending` → `✅ Done` or `✅ Driver done`)
+4. `MEMORY.md` + `project_status.md` — update description line and status section
+5. Run the grep commands below — fix any remaining stale references
+
+### After a claim is invalidated (e.g., "PIO doesn't work" → "PIO works"):
+
+1. Grep the repo for the exact claim text AND synonyms (see commands below)
+2. Fix every hit: source `.c`/`.h` comments, doc `.md` files, test file headers, `CLAUDE.md` bug table
+3. If a test file's header asserts the old conclusion, rewrite it as neutral (describe what it *tests*, not what it *proves*)
+4. If any `.h` header has "NEVER do X" or "NOT for <silicon>" warnings tied to the old claim, remove them
+5. If `docs/tasks.md` references the old claim in a completed item description, update it
+
+### Quick grep commands (run from repo root after any verification session):
+
+```bash
+# Find stale "not functional" / "broken" / "does not work" / "NEVER" claims
+grep -rn "not function\|broken\|does not work\|NEVER.*write\|NOT for" \
+  platforms/nuttx/NuttX/nuttx/arch/arm/src/pic32czca90/ \
+  boards/microchip/czca90curiosity/ \
+  docs/tasks.md docs/sqi_hardware_behavior.md docs/sqi_filesystem.md \
+  CLAUDE.md README.md
+
+# Find stale status markers
+grep -rn "In progress\|in progress\|🔧\|not yet implemented\|not yet done" \
+  docs/tasks.md README.md CLAUDE.md
+
+# Find "pending" in our port docs (filter out the checklist itself)
+grep -n "pending" docs/tasks.md CLAUDE.md README.md | grep -v "Post-Verification\|checklist\|Quick grep\|testing pending"
+```

@@ -44,6 +44,11 @@ def extract_timer(line):
     if search:
         return search.group(1), 'samv7'
 
+    # PIC32CZ CA90 TCC format: initIOTCCTimer(TCC::TCC1),
+    search = re.search(r'initIOTCCTimer\(TCC::(TCC[0-9]+)\)', line, re.IGNORECASE)
+    if search:
+        return search.group(1), 'ca90_tcc'
+
     return None, 'unknown'
 
 def extract_timer_from_channel(line, timer_names):
@@ -64,6 +69,14 @@ def extract_timer_from_channel(line, timer_names):
         if pwm_module in timer_names:
             return str(timer_names.index(pwm_module))
         return pwm_module
+
+    # PIC32CZ CA90 TCC format: initIOTCCChannel(io_timers, {TCC::TCC1, TCC::Channel0}, {GPIO::PortB, GPIO::Pin10}),
+    search = re.search(r'initIOTCCChannel.*TCC::(TCC[0-9]+)', line, re.IGNORECASE)
+    if search:
+        tcc_module = search.group(1)
+        if tcc_module in timer_names:
+            return str(timer_names.index(tcc_module))
+        return tcc_module
 
     return None
 
@@ -107,6 +120,11 @@ def get_timer_groups(timer_config_file, verbose=False):
             if verbose: print('samv7 PWMC timer found: {:}'.format(timer))
             timer_names.append(timer)
             dshot_support[str(len(timers))] = False  # SAMV7 PWMC does not support DShot
+            timers.append(str(len(timers)))
+        elif timer_type == 'ca90_tcc':
+            if verbose: print('CA90 TCC timer found: {:}'.format(timer))
+            timer_names.append(timer)
+            dshot_support[str(len(timers))] = False
             timers.append(str(len(timers)))
         elif timer:
             if verbose: print('found timer def: {:}'.format(timer))

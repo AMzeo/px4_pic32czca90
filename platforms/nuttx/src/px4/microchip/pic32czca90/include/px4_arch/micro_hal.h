@@ -86,8 +86,12 @@ FAR struct i2c_master_s *sam_i2cbus_initialize(int port);
 #define px4_arch_gpioread(pinset)               sam_portread(pinset)
 #define px4_arch_gpiowrite(pinset, value)       sam_portwrite(pinset, value)
 
-/* GPIO interrupt not yet implemented */
-#define px4_arch_gpiosetevent(pinset,r,f,e,fp,a)  (-ENOSYS)
+/* GPIO interrupt via EIC */
+int pic32czca90_gpiosetevent(uint32_t pinset, bool risingedge,
+                             bool fallingedge, bool event,
+                             xcpt_t func, void *arg);
+#define px4_arch_gpiosetevent(pinset,r,f,e,fp,a) \
+    pic32czca90_gpiosetevent(pinset,r,f,e,fp,a)
 
 /* PORT encoding masks for PX4 GPIO helper macros */
 #define PORT_PORT_MASK          (0xFu << 28)

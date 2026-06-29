@@ -142,6 +142,8 @@ device_bus_to_wq(uint32_t device_id_int)
 		case 3: return wq_configurations::I2C3;
 
 		case 4: return wq_configurations::I2C4;
+
+		case 5: return wq_configurations::I2C5;
 		}
 
 	} else if (bus_type == device::Device::DeviceBusType_SPI) {

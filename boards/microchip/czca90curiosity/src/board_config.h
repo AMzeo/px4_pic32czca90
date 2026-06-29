@@ -47,8 +47,8 @@
 #define BOARD_HAS_CONTROL_STATUS_LEDS      1
 #define BOARD_ARMED_STATE_LED  LED_BLUE
 
-/* I2C — SERCOM5 (PC25=SDA, PC26=SCL), registered as bus 5 in board_app_initialize.
- * PX4_NUMBER_I2C_BUSES must be >= bus number (5) so _bus_clocks[] array is large enough.
+/* I2C — SERCOM5 (PC25=SDA, PC26=SCL), registered as PX4 bus 5.
+ * PX4_NUMBER_I2C_BUSES must be >= bus number so _bus_clocks[] array is large enough.
  * BOARD_I2C_LATEINIT prevents px4_platform_init() from calling px4_platform_i2c_init()
  * before GCLK2 generator is configured (would hang on SYNCBUSY). */
 #define PX4_NUMBER_I2C_BUSES    5
@@ -88,8 +88,12 @@
 
 #define PX4_SPIDEV_ICM_42688P       PX4_MK_SPI_SEL(PX4_SPI_BUS_SENSORS, 0)
 
-/* No PWM channels */
-#define DIRECT_PWM_OUTPUT_CHANNELS  0
+/* IMU data-ready interrupt: PA08 → EXTINT[8], function A (EIC) */
+#define GPIO_IMU_DRDY \
+    (PORT_PORTA | PORT_FUNC(0) | PORT_PIN(8) | PORT_FLAG_PMUXEN | PORT_FLAG_INEN)
+
+/* PWM outputs: TCC1 WO0-WO3 (PB10-PB13) on EXT1 header */
+#define DIRECT_PWM_OUTPUT_CHANNELS  4
 
 /* High-resolution timer - uses DWT cycle counter (see platform hrt.c) */
 #define HRT_TIMER               0
@@ -113,8 +117,8 @@
 /* Console buffer */
 #define BOARD_ENABLE_CONSOLE_BUFFER
 
-/* No IO timers for PWM yet */
-#define BOARD_NUM_IO_TIMERS 0
+/* TCC-based PWM: TCC1 (PB10/PB11) + TCC7 (PA22/PA23) */
+#define BOARD_NUM_IO_TIMERS 2
 
 __BEGIN_DECLS
 

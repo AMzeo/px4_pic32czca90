@@ -3,12 +3,11 @@
 /**
  * @file sqi_pio_test.c
  *
- * Definitive PIO vs DMA comparison test for Microchip bug report.
+ * PIO vs DMA comparison diagnostic for SQI1.
  *
- * Proves PIO mode (CFG.MODE=1) does not generate bus activity on
- * PIC32CZ CA90 Michigan Ax silicon (PIC32CZ8110CA90208), while
- * BD-DMA mode (CFG.MODE=2) works correctly with identical clock,
- * pin, and peripheral configuration.
+ * Tests PIO mode (CFG.MODE=1) and BD-DMA mode (CFG.MODE=2) with
+ * identical clock, pin, and peripheral configuration. Reports
+ * PASS/FAIL for each mode independently.
  *
  * Board:   PIC32CZ CA90 Curiosity Ultra (EV16W43A)
  * Flash:   SST26VF032BAT on SQI1 (JEDEC BF 26 42)
@@ -232,7 +231,7 @@ static int test_pio_rdid(uint8_t jedec[3])
   sqiwr(SAM_SQI_TXDATA_OFFSET, 0x00u);
   sqiwr(SAM_SQI_TXDATA_OFFSET, 0x00u);
 
-  /* Wait for RX data (timeout if PIO broken) */
+  /* Wait for RX data (timeout if no response) */
 
   timeout = 2000000u;
   rxcnt = 0;

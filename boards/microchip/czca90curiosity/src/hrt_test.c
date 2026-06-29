@@ -259,9 +259,8 @@ static void cmd_cross(void)
  *
  * Reads:
  *   SYST_RVR         — SysTick reload (determines actual interrupt frequency)
- *   MCLK.CLKDIV[0]   — CPU Clock Divider (DFP MCLK_CLKDIV0, offset 0x0C)
- *   MCLK.CLKDIV[1]   — Second domain divider (DFP MCLK_CLKDIV1, offset 0x10;
- *                       NOT the CPU divider — Harmony sets this to 2)
+ *   MCLK.CLKDIV[0]   — CPU Clock Divider (offset 0x0C)
+ *   MCLK.CLKDIV[1]   — Second domain divider (offset 0x10; NOT the CPU divider)
  *   GCLK0/GCLK1 GENCTRL — source and divider for each generator
  *
  * Expected: SYST_RVR=2999999, CLKDIV[0]=1 (CPU=300 MHz), CLKDIV[1]=2
@@ -273,13 +272,12 @@ static void cmd_regs(void)
   uint32_t syst_rvr = *(volatile uint32_t *)0xE000E014u;  /* SYST_RVR */
   uint32_t syst_cvr = *(volatile uint32_t *)0xE000E018u;  /* SYST_CVR */
 
-  /* MCLK (CA90 base 0x44052000) — hardware-verified register map:
+  /* MCLK (CA90 base 0x44052000):
    *   0x0C: CLKDIV0 — CPU clock divider. Reads 1 (reset default). WRITE = BusFault (PAC).
-   *   0x10: DFP CLKDIV[1] — accessible, Harmony writes 2 here for CKRDY barrier.
-   *   0x14: DS claims CLKDIV1 here — HARDWARE-CONFIRMED BUS STALL on read. DO NOT ACCESS.
-   * Conclusion: DFP stride-4 array matches hardware; DS70005522C §21.6 is wrong at 0x14. */
+   *   0x10: CLKDIV[1] — accessible, set to 2 for CKRDY barrier.
+   *   0x14: NOT accessible on CA90 — bus stall on read. DO NOT ACCESS. */
   uint32_t mclk_div0   = *(volatile uint32_t *)0x4405200Cu; /* CLKDIV0: CPU div, reads 1 */
-  uint32_t mclk_rsvd10 = *(volatile uint32_t *)0x44052010u; /* DFP CLKDIV[1]: Harmony writes 2 */
+  uint32_t mclk_rsvd10 = *(volatile uint32_t *)0x44052010u; /* CLKDIV[1]: set to 2 */
 
   /* GCLK GENCTRL (CA90 base 0x44050000; GENCTRL[n] at 0x0020 + n*4) */
   uint32_t gclk0 = *(volatile uint32_t *)0x44050020u;
@@ -306,8 +304,8 @@ static void cmd_regs(void)
          (unsigned)mclk_div0,
          (unsigned)(mclk_div0 ? mclk_div0 : 1u),
          cpu_mhz);
-  printf("  [0x44052010] DFP CLKDIV[1] = %u  (Harmony writes 2 here;"
-         " 0x14 bus-stalls — hardware proves DFP stride-4 layout is correct)\n",
+  printf("  [0x44052010] CLKDIV[1]     = %u  (set to 2 for CKRDY barrier;"
+         " 0x14 bus-stalls — DS map wrong)\n",
          (unsigned)mclk_rsvd10);
 
   printf("--- GCLK generators (base 0x44050000) ---\n");
@@ -332,14 +330,13 @@ static void cmd_regs(void)
          (int)(1000000 / CONFIG_USEC_PER_TICK));
   printf("  Expected SYST_RVR = %u\n",
          (unsigned)(BOARD_CPU_FREQUENCY / (1000000u / CONFIG_USEC_PER_TICK) - 1u));
-  printf("--- Cross-check / DFP-DS discrepancy ---\n");
+  printf("--- Cross-check ---\n");
   if (syst_rvr == 2999999u && mclk_div0 == 1u)
     printf("  OK: SYST_RVR=300MHz, CLKDIV0(0x0C)=1 -> CPU=300 MHz\n");
   else
     printf("  UNEXPECTED: SYST_RVR=%u CLKDIV0=%u\n",
            (unsigned)syst_rvr, (unsigned)mclk_div0);
-  printf("  DFP CLKDIV[1](0x10)=%u (Harmony writes 2;"
-         " 0x14=bus-stall: DS map wrong, DFP layout correct)\n",
+  printf("  CLKDIV[1](0x10)=%u (expect 2; 0x14=bus-stall: DS map wrong)\n",
          (unsigned)mclk_rsvd10);
 }
 

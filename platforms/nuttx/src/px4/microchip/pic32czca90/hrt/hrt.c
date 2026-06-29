@@ -24,8 +24,7 @@
  * Resolution: 1/150 MHz ≈ 6.67 ns per TCC tick.
  * Overflow period: 2^32 / 150e6 ≈ 28.6 s.
  *
- * All register offsets and bit masks verified against
- * PIC32CZ8110CA80208_DFP component/tcc.h (2024-07-31).
+ * Register offsets and bit masks from PIC32CZ8110CA80208 component/tcc.h.
  */
 
 #include <px4_platform_common/px4_config.h>
@@ -90,7 +89,7 @@ static void hrt_call_invoke(void);
  * Read TCC0 COUNT using the mandatory READSYNC protocol.
  *
  * TCC COUNT register is in the TCC clock domain (GCLK1).  A direct APB
- * read would return a stale value.  Harmony plib_tcc0.c sequence:
+ * read would return a stale value.  READSYNC protocol:
  *   1. Write CMD=READSYNC to CTRLBSET (forces shadow→read buffer copy).
  *   2. Poll SYNCBUSY.CTRLB until clear.
  *   3. Poll CTRLBSET.CMD until CMD field clears (copy complete).
@@ -210,7 +209,7 @@ static int hrt_tcc_isr(int irq, FAR void *context, FAR void *arg)
 /**
  * Initialize TCC0 as the HRT timebase and callout engine.
  *
- * Sequence follows Harmony plib_clock.c + plib_tcc0.c exactly:
+ * Sequence:
  *   1. Enable TCC0 APB clock (MCLK CLKMSK).
  *   2. Route GCLK1 (150 MHz) to TCC0 via GCLK_PCHCTRL[31].
  *   3. Reset TCC0.
@@ -234,13 +233,11 @@ void hrt_init(void)
   regval |= (1u << (MCLK_ID_APB_TCC0 % 32u));
   putreg32(regval, SAM_MCLK_CLKMSK(MCLK_ID_APB_TCC0 / 32u));
 
-  /* 2. Route GCLK1 (generator 1, 150 MHz) to TCC0 GCLK channel 31
-   *    Matches Harmony: GCLK_PCHCTRL[31] = GEN(1) | CHEN
-   */
+  /* 2. Route GCLK1 (generator 1, 150 MHz) to TCC0 GCLK channel 31 */
   putreg32(GCLK_PCHCTRL_GEN(1) | GCLK_PCHCTRL_CHEN,
            SAM_GCLK_PCHCTRL(TCC0_GCLK_ID));
 
-  /* Wait for GCLK sync (poll CHEN as Harmony does) */
+  /* Wait for GCLK sync */
   while ((getreg32(SAM_GCLK_PCHCTRL(TCC0_GCLK_ID)) & GCLK_PCHCTRL_CHEN) == 0)
     {
     }

@@ -2,18 +2,17 @@
 #
 # PIC32CZ CA90 Curiosity Ultra - sensor drivers
 #
-# Keep minimal: only start sensors physically connected.
-# Dead-sensor probing causes I2C bus congestion (SAMV71 lesson).
+# SPI bus 3: ICM-45686 (primary IMU)
+# I2C bus 5: 13DOF Click (MIKROE-2817) — BMI088 + BMM150 + BME680
+#   BMI088 accel 0x18, gyro 0x68, BMM150 mag 0x10, BME680 0x76 (no driver)
 #
 
-# 6DOF IMU 6 Click (MIKROE-4044) - ICM-20689 on SPI bus 3
-icm20689 -s -b 3 start
+# Primary IMU — 6DOF IMU 27 Click (MIKROE-6514) on SPI bus 3
+icm45686 -s -b 3 start
 
-# 13DOF Click — test two different I2C sensors simultaneously
-# BMI088 accel only (no gyro — avoids dual-instance PX4 driver bug)
-bmi088_i2c -A -X -b 5 start
-# BMM150 magnetometer
+# Magnetometer — 13DOF Click BMM150 on I2C bus 5 (MUST start before BMI088)
 bmm150 -X -b 5 start
 
-# BMM150 on 13DOF Click — enable after accel+gyro stability proven
-# bmm150 -X -b 5 start
+# Secondary IMU — 13DOF Click BMI088 on I2C bus 5
+bmi088_i2c -A -X -b 5 start
+bmi088_i2c -G -X -b 5 -a 0x68 start

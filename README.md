@@ -6,7 +6,7 @@ This branch ports PX4 Autopilot to the **Microchip PIC32CZ CA90 Curiosity Ultra*
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| Build | ✅ Working | ~911 KB flash (10.9% of 8 MB), ~46 KB SRAM |
+| Build | ✅ Working | ~995 KB flash (11.9% of 8 MB), ~49 KB SRAM |
 | Clock tree | ✅ Working | PLL0 → 300 MHz CPU; GCLK1 → 150 MHz; GCLK3 → 32 kHz |
 | SERCOM1 console | ✅ Working | PC04/PC07, 115200 baud, J700 PKOB4 USB |
 | NSH shell | ✅ Working | Verified on hardware, stable 3+ days |
@@ -17,15 +17,13 @@ This branch ports PX4 Autopilot to the **Microchip PIC32CZ CA90 Curiosity Ultra*
 | I-cache / D-cache | ✅ Working | Write-through D-cache; MPU 16 regions |
 | SQI param storage | ✅ Working | SST26VF032BAT on SQI1 — BD-DMA, XIP reads, D-cache safe |
 | SD card logging | ✅ Working | SDMMC1 ADMA2 mode; 0 dropouts; shares pins with SQI1 |
-| NuttX SPI driver | ✅ In NuttX | SERCOM3 SPI master in NuttX submodule |
-| NuttX I2C driver | ✅ In NuttX | SERCOM5 I2C master in NuttX submodule |
-| NuttX EIC header | ✅ In NuttX | External Interrupt Controller register defs |
-| SPI / IMU | 🔧 In progress | SERCOM3, ICM-20689 (6DOF Click) |
-| I2C / mag / baro | 🔧 In progress | SERCOM5, BMI088 + BMP388 + BMM150 |
-| System DMA | 🔲 Pending | Stage 2.1 |
-| PWM outputs | 🔲 Pending | Stage 4.1 — TCC1/TCC2 |
-| USBHS (MAVLink) | 🔲 Pending | Stage 5.1 — needed before first hover |
-| CAN-FD | 🔲 Pending | Stage 9.1 |
+| System DMA | ✅ Working | 16-channel DMA controller; SPI + I2C offload |
+| SPI / IMU | ✅ Working | SERCOM3 + DMA, ICM45686 @ 800 Hz — verified on hardware |
+| I2C / mag / baro | ✅ Working | SERCOM5 + DMA RX, BMI088 + BMP388 + BMM150 — verified on hardware |
+| EIC (ext. interrupts) | ✅ Built | 16-channel async EIC + gpiosetevent glue; no active consumer yet |
+| PWM outputs | ✅ Built | TCC1 WO0-WO3 (PB10-PB13), 4ch @ 400 Hz; awaiting scope verify |
+| USBHS (MAVLink) | 🔲 Pending | Needed before first hover |
+| CAN-FD | 🔲 Pending | MCAN3/MCAN4 with ATA6561 |
 
 ## Hardware
 
@@ -50,9 +48,9 @@ This branch ports PX4 Autopilot to the **Microchip PIC32CZ CA90 Curiosity Ultra*
 
 | Interface | SERCOM | Pins | Connector | Sensor |
 |-----------|--------|------|-----------|--------|
-| SPI MOSI/MISO/SCK/CS | SERCOM3 | PD03/PD05/PD04/PD06 | MikroBUS | ICM-20689 (6DOF Click) |
+| SPI MOSI/MISO/SCK/CS | SERCOM3 | PC12/PC15/PC13/PC14 | EXT2 pins 16/17/18/15 | ICM45686 (6DOF IMU) |
 | I2C SDA/SCL | SERCOM5 | PC25/PC26 | EXT2 pins 11/12 | BMI088 + BMP388 + BMM150 |
-| IMU DRDY | — (GPIO) | PA8 | MikroBUS pin 15 | — |
+| IMU DRDY | — (GPIO) | PA8 | EXT2 pin 9 | — |
 | SD Card | SDMMC1 | PC30/PG03/PC31/PG00-02/PC28 | J601 microSD | Flight logs |
 | CAN3 | CAN3 | PD13/PC29 | J701 (ATA6561) | — |
 | CAN4 | CAN4 | PA31/PA30 | J702 (ATA6561) | — |

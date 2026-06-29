@@ -1,12 +1,10 @@
 /****************************************************************************
  *
- *   Copyright (c) 2024 PX4 Development Team. All rights reserved.
+ *   Copyright (c) 2024-2025 PX4 Development Team. All rights reserved.
  *
  * SPDX-License-Identifier: BSD-3-Clause
  *
  ****************************************************************************/
-
-/* Minimal hw_description.h for PIC32CZ CA90 */
 
 #pragma once
 
@@ -19,6 +17,9 @@ enum Port {
 	PortB,
 	PortC,
 	PortD,
+	PortE,
+	PortF,
+	PortG,
 };
 
 enum Pin {
@@ -33,3 +34,27 @@ struct GPIOPin {
 	Pin pin;
 };
 } // namespace GPIO
+
+namespace TCC
+{
+enum TCCModule {
+	TCC1 = 0,
+	TCC7 = 1,
+};
+
+enum Channel {
+	Channel0 = 0,
+	Channel1,
+	Channel2,
+	Channel3,
+	Channel4,
+	Channel5,
+	Channel6,
+	Channel7,
+};
+
+struct TCCChannel {
+	TCCModule module;
+	Channel channel;
+};
+} // namespace TCC

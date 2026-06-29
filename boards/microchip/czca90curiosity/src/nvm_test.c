@@ -40,7 +40,7 @@
 #define NVM_SCRATCH_ADDR    0x0C7E0000u   /* scratch page (4 KB) */
 #define NVM_TEST_PATTERN    0xDEADBEEFu   /* fill pattern */
 
-/* Cortex-M7 D-cache line size — matches Harmony CACHE_ALIGN_SIZE */
+/* Cortex-M7 D-cache line size */
 
 #define NVM_CACHE_LINE      32u
 
@@ -152,8 +152,7 @@ int nvm_test_main(int argc, char *argv[])
 
   /* Step 1: read first 16 bytes before erase.
    * Invalidate D-cache on the scratch page first so the CPU fetches from
-   * flash via AHB rather than returning stale cached data (matches
-   * Harmony FCW_Read() which calls DCACHE_INVALIDATE_BY_ADDR before memcpy).
+   * flash via AHB rather than returning stale cached data.
    */
 
   up_invalidate_dcache(NVM_SCRATCH_ADDR, NVM_SCRATCH_ADDR + 16u);
@@ -203,7 +202,6 @@ int nvm_test_main(int argc, char *argv[])
    * Invalidate D-cache on the flash region before CPU reads — the erase
    * was done by FCW via AHB which bypasses the CPU cache.  Without this
    * the CPU would return the stale pre-erase data from cache.
-   * Mirrors what Harmony FCW_Read() does: DCACHE_INVALIDATE_BY_ADDR(addr, len).
    */
 
   up_invalidate_dcache(NVM_SCRATCH_ADDR, NVM_SCRATCH_ADDR + 16u);
@@ -235,9 +233,8 @@ int nvm_test_main(int argc, char *argv[])
          NVM_TEST_PATTERN);
 
   /* Build pattern in a 1 KB RAM buffer.
-   * Aligned to D-cache line size (32 B) — matches Harmony CACHE_ALIGN on
-   * writeData[] so that DCACHE_CLEAN_BY_ADDR covers whole cache lines only.
-   * static = SRAM, not stack, guarantees alignment and lifetime.
+   * Aligned to D-cache line size (32 B) so DCACHE_CLEAN_BY_ADDR covers
+   * whole cache lines only. static = SRAM, not stack.
    */
 
   static uint32_t row_buf[SAM_FCW_ROW_SIZE / sizeof(uint32_t)]
@@ -253,8 +250,6 @@ int nvm_test_main(int argc, char *argv[])
    * D-cache.  If cache lines are dirty and not yet written back, FCW reads
    * stale (zeroed/garbage) SRAM and programs that into flash instead of
    * our pattern.
-   * Matches: DCACHE_CLEAN_BY_ADDR((uint32_t *)writePtr, sizeof(writeData))
-   * in Harmony apps/fcw/flash_read_write/firmware/src/main.c.
    */
 
   up_clean_dcache((uintptr_t)row_buf,

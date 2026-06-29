@@ -6,8 +6,8 @@
 #
 ############################################################################
 
-px4_add_library(arch_io_pins
-	io_timer_tcc.c
-	pwm_servo.c
-	${PX4_BOARD_DIR}/src/timer_config.cpp
+px4_add_library(arch_gpio
+	pic32czca90_gpiosetevent.c
 )
+
+target_link_libraries(arch_gpio PRIVATE nuttx_arch)

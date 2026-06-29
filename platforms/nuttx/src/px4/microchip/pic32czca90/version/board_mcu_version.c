@@ -8,28 +8,35 @@
 
 /**
  * @file board_mcu_version.c
- * PIC32CZ CA90 SoC version identification
+ * PIC32CZ CA90 SoC version identification via DSU DID register
  */
 
 #include <px4_platform_common/px4_config.h>
 #include <px4_platform_common/defines.h>
+#include "arm_internal.h"
+#include "hardware/sam_mclk.h"
 
-/* TODO: Enable DSU APB clock (MCLK_ID_APB_DSU, not yet defined) before
- * reading CA90_DSU_DID.  Until then return a fixed stub to avoid bus stall. */
-#define CA90_DSU_DID    0x44000120
+#define CA90_DSU_DID       0x44000120u
 
-/* Extract fields from DID */
-#define DID_REVISION(x)     (((x) >> 8) & 0xF)
+#define DID_REVISION(x)    (((x) >> 28) & 0xFu)
+#define DID_PRODUCT(x)     (((x) >> 20) & 0xFFu)
+#define DID_DEVSEL(x)      (((x) >> 12) & 0xFFu)
 
 int board_mcu_version(char *rev, const char **revstr, const char **errata)
 {
-	/* Stub: return fixed values until DSU clock is enabled */
+	uint32_t clkmsk = getreg32(SAM_MCLK_CLKMSK(0));
+	clkmsk |= SAM_MCLK_CLKMSK_BIT(MCLK_ID_APB_DSU);
+	putreg32(clkmsk, SAM_MCLK_CLKMSK(0));
+
+	uint32_t did = getreg32(CA90_DSU_DID);
+	uint32_t revision = DID_REVISION(did);
+
 	*revstr = "PIC32CZCA90";
-	*rev = 'A';
+	*rev = (char)('A' + revision);
 
 	if (errata) {
 		*errata = NULL;
 	}
 
-	return 0;
+	return (int)revision;
 }

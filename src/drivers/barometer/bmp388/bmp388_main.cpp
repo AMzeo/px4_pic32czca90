@@ -90,7 +90,7 @@ extern "C" int bmp388_main(int argc, char *argv[])
 	using ThisDriver = BMP388;
 	BusCLIArguments cli{true, true};
 	cli.i2c_address = 0x76;
-	cli.default_i2c_frequency = 400 * 1000;
+	cli.default_i2c_frequency = 100 * 1000;
 	cli.default_spi_frequency = 10 * 1000 * 1000;
 
 	const char *verb = cli.parseDefaultArguments(argc, argv);

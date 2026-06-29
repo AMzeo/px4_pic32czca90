@@ -40,6 +40,15 @@ px4_add_module(
 		arch_io_pins
 )
 
+# I2C ISR/DMA stats — 'i2c_stats'
+px4_add_module(
+	MODULE board_i2c_stats
+	MAIN i2c_stats
+	SRCS
+		i2c_stats.c
+)
+
+
 if(CONFIG_PIC32CZCA90_SQI1)
 	# SQI flash write path test — 'sqi_test'
 	px4_add_module(
@@ -61,6 +70,7 @@ endif()
 
 target_link_libraries(drivers_board
 	PRIVATE
+		arch_gpio
 		arch_io_pins
 		drivers__led
 		nuttx_arch

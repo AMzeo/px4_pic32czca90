@@ -66,6 +66,7 @@ static constexpr wq_config_t I2C1{"wq:I2C1", CONFIG_WQ_I2C_STACKSIZE, (int8_t)CO
 static constexpr wq_config_t I2C2{"wq:I2C2", CONFIG_WQ_I2C_STACKSIZE, (int8_t)CONFIG_WQ_I2C2_PRIORITY};
 static constexpr wq_config_t I2C3{"wq:I2C3", CONFIG_WQ_I2C_STACKSIZE, (int8_t)CONFIG_WQ_I2C3_PRIORITY};
 static constexpr wq_config_t I2C4{"wq:I2C4", CONFIG_WQ_I2C_STACKSIZE, (int8_t)CONFIG_WQ_I2C4_PRIORITY};
+static constexpr wq_config_t I2C5{"wq:I2C5", CONFIG_WQ_I2C_STACKSIZE, (int8_t)CONFIG_WQ_I2C5_PRIORITY};
 
 // PX4 att/pos controllers, highest priority after sensors.
 static constexpr wq_config_t nav_and_controllers{"wq:nav_and_controllers", CONFIG_WQ_NAV_AND_CONTROLLERS_STACKSIZE, (int8_t)CONFIG_WQ_NAV_AND_CONTROLLERS_PRIORITY};

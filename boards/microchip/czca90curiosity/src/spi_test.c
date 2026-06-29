@@ -26,7 +26,7 @@ int spi_test_main(int argc, char *argv[])
 	printf("SYNCBUSY: 0x%08lx\n", (unsigned long)getreg32(base + 0x1C));
 
 	/* Dump PORT C pin config for PC12(MOSI), PC13(SCK), PC15(MISO)
-	 * PORT base = 0x44840000 (DFP-verified), group size = 0x80 */
+	 * PORT base = 0x44840000, group size = 0x80 */
 	uintptr_t portc = 0x44840000u + (2u * 0x80u); /* PORTC = 0x44840100 */
 	printf("\n=== PORTC Pin Config ===\n");
 	printf("PC12 PINCFG: 0x%02x (expect PMUXEN+INEN=0x01 for MOSI output)\n",
@@ -51,8 +51,8 @@ int spi_test_main(int argc, char *argv[])
 		return -1;
 	}
 
-	/* Verify GCLK channel 24 (SERCOM3 core, DFP-verified) */
-	uintptr_t gclk_base = 0x44050000u; /* GCLK base (DFP-verified) */
+	/* Verify GCLK channel 24 (SERCOM3 core) */
+	uintptr_t gclk_base = 0x44050000u;
 	uint32_t pchctrl24 = getreg32(gclk_base + 0x80 + 24*4); /* PCHCTRL[24] */
 	printf("\nGCLK PCHCTRL[24] (SERCOM3 core): 0x%08lx (expect GEN=2, CHEN=1 → 0x00000042)\n",
 		(unsigned long)pchctrl24);

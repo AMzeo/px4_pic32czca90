@@ -41,3 +41,11 @@ param set-default HIL_ACT_FUNC1 101
 param set-default HIL_ACT_FUNC2 102
 param set-default HIL_ACT_FUNC3 103
 param set-default HIL_ACT_FUNC4 104
+
+# PWM motor output — TCC1 (ch 1-2) + TCC7 (ch 3-4), 400 Hz
+param set-default PWM_MAIN_TIM0 400
+param set-default PWM_MAIN_TIM1 400
+param set-default PWM_MAIN_FUNC1 101
+param set-default PWM_MAIN_FUNC2 102
+param set-default PWM_MAIN_FUNC3 103
+param set-default PWM_MAIN_FUNC4 104

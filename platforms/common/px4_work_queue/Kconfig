@@ -122,6 +122,13 @@ config WQ_I2C4_PRIORITY
 	help
 	  Sets the relative priority for the I2C4 work queue.
 
+config WQ_I2C5_PRIORITY
+	int "Relative priority for wq:I2C5"
+	default -13
+	range -255 0
+	help
+	  Sets the relative priority for the I2C5 work queue.
+
 endmenu # I2C Bus Work Queues
 
 config WQ_NAV_AND_CONTROLLERS_STACKSIZE

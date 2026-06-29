@@ -8,12 +8,14 @@
 
 /**
  * @file board_identity.c
- * PIC32CZ CA90 board identity implementation
+ * PIC32CZ CA90 board identity — reads factory-programmed unique ID
+ * from FUSES_CALOTP (0x0A007000 + 0x1E0).
  */
 
 #include <px4_platform_common/px4_config.h>
 #include <stdio.h>
 #include <string.h>
+#include "arm_internal.h"
 
 #define CPU_UUID_BYTE_FORMAT_ORDER          {3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8}
 #define SWAP_UINT32(x) (((x) >> 24) | (((x) & 0x00ff0000) >> 8) | (((x) & 0x0000ff00) << 8) | ((x) << 24))
@@ -24,15 +26,16 @@
 
 static const uint16_t soc_arch_id = PX4_SOC_ARCH_ID;
 
-/* TODO: Replace with real NVM serial row once MCLK_ID_APB_DSU is defined and
- * the CA90 serial number address is confirmed from the DFP.  Until then, fixed
- * dummy words are used; all boards will report the same GUID. */
-#define CA90_SERIAL_WORDS   3
+#define CA90_UNIQID0   0x0A0071E0u
+#define CA90_UNIQID1   0x0A0071E4u
+#define CA90_UNIQID2   0x0A0071E8u
 
-/* Dummy serial words (stub) */
-static const uint32_t ca90_dummy_serial[CA90_SERIAL_WORDS] = {
-	0xCA900001u, 0xCA900002u, 0xCA900003u
-};
+static void board_get_serial(uint32_t serial[3])
+{
+	serial[0] = getreg32(CA90_UNIQID0);
+	serial[1] = getreg32(CA90_UNIQID1);
+	serial[2] = getreg32(CA90_UNIQID2);
+}
 
 typedef const uint8_t uuid_uint8_reorder_t[PX4_CPU_UUID_BYTE_LENGTH];
 
@@ -53,12 +56,11 @@ void board_get_uuid(uuid_byte_t uuid_bytes)
 
 __EXPORT void board_get_uuid32(uuid_uint32_t uuid_words)
 {
+	uint32_t serial[3];
+	board_get_serial(serial);
+
 	for (unsigned i = 0; i < PX4_CPU_UUID_WORD32_LENGTH; i++) {
-		if (i < CA90_SERIAL_WORDS) {
-			uuid_words[i] = ca90_dummy_serial[i];
-		} else {
-			uuid_words[i] = ca90_dummy_serial[i % CA90_SERIAL_WORDS] ^ (i << 24);
-		}
+		uuid_words[i] = serial[i];
 	}
 }
 
@@ -85,18 +87,12 @@ int board_get_uuid32_formated(char *format_buffer, int size,
 
 int board_get_mfguid(mfguid_t mfgid)
 {
+	uint32_t serial[3];
+	board_get_serial(serial);
 	uint8_t *rv = &mfgid[0];
 
 	for (unsigned i = 0; i < PX4_CPU_UUID_WORD32_LENGTH; i++) {
-		uint32_t uuid_val;
-
-		if (i < CA90_SERIAL_WORDS) {
-			uuid_val = ca90_dummy_serial[i];
-		} else {
-			uuid_val = ca90_dummy_serial[i % CA90_SERIAL_WORDS] ^ (i << 24);
-		}
-
-		uint32_t uuid_bytes = SWAP_UINT32(uuid_val);
+		uint32_t uuid_bytes = SWAP_UINT32(serial[i]);
 		memcpy(rv, &uuid_bytes, sizeof(uint32_t));
 		rv += sizeof(uint32_t);
 	}
@@ -120,7 +116,10 @@ int board_get_mfguid_formated(char *format_buffer, int size)
 
 int board_get_px4_guid(px4_guid_t px4_guid)
 {
+	uint32_t serial[3];
+	board_get_serial(serial);
 	uint8_t *pb = (uint8_t *)&px4_guid[0];
+
 	*pb++ = (soc_arch_id >> 8) & 0xff;
 	*pb++ = (soc_arch_id & 0xff);
 
@@ -129,15 +128,7 @@ int board_get_px4_guid(px4_guid_t px4_guid)
 	}
 
 	for (unsigned i = 0; i < PX4_CPU_UUID_WORD32_LENGTH; i++) {
-		uint32_t uuid_val;
-
-		if (i < CA90_SERIAL_WORDS) {
-			uuid_val = ca90_dummy_serial[i];
-		} else {
-			uuid_val = ca90_dummy_serial[i % CA90_SERIAL_WORDS] ^ (i << 24);
-		}
-
-		uint32_t uuid_bytes = SWAP_UINT32(uuid_val);
+		uint32_t uuid_bytes = SWAP_UINT32(serial[i]);
 		memcpy(pb, &uuid_bytes, sizeof(uint32_t));
 		pb += sizeof(uint32_t);
 	}

@@ -302,7 +302,7 @@ When any clock frequency, GCLK source, SERCOM pin, or baud rate changes — upda
 | IRQ table SAMD5x-derived (137 IRQs) | `arch/arm/include/pic32czca90/pic32czca90_irq.h` | SERCOM1 DRE at wrong offset (50 vs 64); interrupt-driven drivers would bind wrong vectors | Complete rewrite from Harmony `device_vectors.h` (PIC32CZ8110CA80208 DFP): 222 IRQs, SERCOM0-9 ×7 each, TCC0-9, CAN0-5 |
 | chip.h peripheral counts SAMD5x-derived | `arch/arm/include/pic32czca90/chip.h` | NSERCOM=8, NTC=8, NTCC=5, NCAN=2 — all wrong for CA90 | Updated to NSERCOM=10, NTC=0 (CA90 has no TC, only TCC), NTCC=10, NCAN=6 |
 | DSU DID address wrong (SAMD5x value) | `board_mcu_version.c`, `board_identity.c` | `ver mcu` / `ver px4guid` / `ver all` hang → Hard Fault (unmapped read at 0x41002018) | CA90 DSU at 0x44000000 (APB A), DID offset = 0x0120 (DFP-verified) → `CA90_DSU_DID = 0x44000120` |
-| DSU reads cause CPU bus stall | `board_mcu_version.c`, `board_identity.c` | `ver mcu`, `ver px4guid`, `ver all` hang system completely — CPU stalls waiting for AHB response | DSU APB clock not enabled (MCLK_ID_APB_DSU missing from sam_mclk.h); bus stall on clock-gated peripheral. Stubbed with fixed return values until DSU MCLK ID is known and clock is enabled |
+| DSU reads cause CPU bus stall | `board_mcu_version.c`, `board_identity.c` | `ver mcu`, `ver px4guid`, `ver all` hang system completely — CPU stalls waiting for AHB response | DSU APB clock not enabled. Final fix: enable MCLK_ID_APB_DSU (=1) in CLKMSK[0] before reading DID. UID reads from FUSES_CALOTP (0x0A0071E0) need no clock enable. |
 | rcS `ver all` in startup script blocked NSH | `ROMFS/px4fmu_common/init.d/rcS` | System printed 3 lines of ver output then hung — remaining lines in TX buffer couldn't drain because CPU was stalled at DSU access | Removed `ver all` from rcS; DSU stall also fixed by stubbing board_identity/mcu_version |
 | `param set-default` doesn't set active in-memory value | `rc.board_defaults` | `cdcacm_autostart` runs despite `SYS_USB_AUTO -1` set via `set-default`; ~5 s after boot idle: "Device /dev/ttyACM0 does not exist" spam, system appears stuck | `param set-default` only updates stored default — when param import fails (no storage), in-memory value stays at compiled-in default. Changed to `param set SYS_USB_AUTO -1` |
 | LED1 heartbeat never fired | `boards/microchip/czca90curiosity/src/init.c` | LED1 stayed off — heartbeat was wired into `pic32czca90_bringup()` (NuttX board layer) which is never called in a PX4 build; PX4 `board_app_initialize` in `init.c` overrides it | Moved heartbeat `work_queue(LPWORK, ...)` into PX4 `board_app_initialize` in `init.c` |
@@ -310,6 +310,30 @@ When any clock frequency, GCLK source, SERCOM pin, or baud rate changes — upda
 | Missing TCC MCLK APB clock IDs | `hardware/sam_mclk.h` | `MCLK_ID_APB_TCC0` through `MCLK_ID_APB_TCC9` not defined (41-50) — hrt_init() would fail to enable TCC0 APB clock, leaving TCC0 registers inaccessible | Added all 10 TCC MCLK IDs (41-50) after SERCOM9 definition |
 | HRT callouts never fired — all PX4 tasks stall | `platforms/nuttx/src/px4/microchip/pic32czca90/hrt/hrt.c` | `hrt_call_every()` queued work items that sat in queue forever; all PX4 `ScheduledWorkItem` modules (commander, sensors, nav) never executed their periodic work; `ps` showed every task `Waiting` | Complete rewrite: TCC0 free-running at 150 MHz (GCLK1, DIV1), CC[0] compare match ISR fires `hrt_call_invoke()` at each deadline, `hrt_reschedule()` programs next CC[0]; READSYNC protocol for COUNT reads (Harmony-verified) |
 | SQI param save: value not persisting across reboot | `boards/microchip/czca90curiosity/src/qspi.c` | `param set X 99999; param save; reboot; param show X` → value reverted to default. BSON import showed empty file (5 bytes). No error messages on save. | Root cause: D-cache coherency. FTL read-modify-write cycle read stale cached XIP data (old flash contents) and wrote it back, overwriting the just-saved param. Fix: (1) D-cache invalidate before every XIP read; (2) remove unnecessary XIP re-entry between erase/write; (3) mutex for concurrency; (4) read-back verification with 3 retries; (5) static buffers → stack-local |
+| I2C ISR missing SYNCBUSY waits | `sam_i2c_master.c` | I2C probes work (init context) but ALL work-queue periodic transfers timeout (50ms). System crashes at timeout syslog print → looks like "SYNCBUSY caused hang" but it's actually stack overflow on 2336-byte wq:I2C5 stack from syslog() with 9 format args. Root cause masked for days. | Fix: (1) SYNCBUSY wait after EVERY write to ADDR, DATA, CTRLB in ISR — matching Harmony `plib_sercom0_i2c_master.c` exactly; (2) Replace `syslog()` with `_alert()` in timeout path (stack-safe polled output); (3) Sem drain `while(nxsem_trywait()==OK)` before each transfer prevents stale post from causing immediate return mid-bus-activity |
+| I2C bus stuck after software reboot | `sam_i2c_master.c` | All I2C sensors fail to probe after `reboot` command (but work on fresh flash). Intermittent — ~50% of reboots fail. No timeout message printed (system hangs at probe). | Root cause: software reboot resets CPU but NOT I2C slaves. If slave was mid-byte (SDA low), it stays low forever waiting for SCL clocks. SERCOM init forces BUSSTATE=IDLE in STATUS register, but that only affects the master's state machine — doesn't fix physical SDA held low. Fix: I2C bus recovery (9 SCL clock pulses as GPIO) before SERCOM init. Standard procedure per I2C spec §3.1.16. |
+
+### I2C Driver — Production Rules for CA90 SERCOM
+
+**File:** `platforms/nuttx/NuttX/nuttx/arch/arm/src/pic32czca90/sam_i2c_master.c`
+
+These rules are hard-won from weeks of debugging. Violating any one causes intermittent failures that are extremely difficult to diagnose.
+
+1. **SYNCBUSY after EVERY register write** to ADDR, DATA, CTRLB, STATUS — even in ISR context. Harmony does this. Without it, writes don't propagate at 300 MHz CPU / 100 MHz peripheral clock → ISR state machine gets confused → transfer never completes.
+
+2. **Never use `syslog()` from work queue error paths.** The wq:I2C5 stack is 2336 bytes. `syslog()` with multiple format args overflows it. Use `_alert()` (polled lowputc, minimal stack). A stack overflow during error reporting masks the actual error — you see "system hangs" instead of the diagnostic that would explain the root cause.
+
+3. **Semaphore drain before each transfer** (`while (nxsem_trywait(&waitsem) == OK);`). If a previous transfer timed out AND an ISR fires after the timeout (stale NVIC pending), the sem gets a stale post. Next transfer's sem_wait returns immediately while ADDR is already on the bus → bus stuck in OWNER with half-sent address. Drain prevents this.
+
+4. **I2C bus recovery on init** (9 SCL clocks as GPIO). After software reboot, slaves may hold SDA low from an interrupted transfer. The CPU resets but slaves don't. Without recovery, probes fail intermittently after reboot. This is standard I2C practice (I2C spec §3.1.16, NXP AN10216).
+
+5. **`SEM_PRIO_NONE` on waitsem** — any semaphore posted from ISR MUST have this. Without it, NuttX priority inheritance corrupts scheduler state when called from ISR context with high-priority waiters.
+
+6. **All 7 SERCOM NVIC vectors → same handler.** DFP `SERCOM5_I2C_1_INT_SRC = 94` means SB fires on vector EXTINT+94 = `SAM_IRQ_SERCOM5_2`, NOT `SAM_IRQ_SERCOM5_1`. The `_N` suffix is position-in-vector-table, not function. Always enable all 7 and let the handler read INTFLAG.
+
+7. **Never return to task context between I2C messages.** ISR must handle the full multi-message sequence (write reg addr → repeated START → read data) via `i2c_start_next_msg()`. Returning to task between messages corrupts SERCOM state.
+
+8. **Force BUSSTATE=IDLE before every new transfer.** CA90 STOP doesn't reliably auto-transition OWNER→IDLE. If OWNER from prior STOP, force IDLE.
 
 ### NuttX Integration
 
@@ -449,12 +473,18 @@ Three files that NuttX core includes everywhere — critical to get right:
 - SQI1 flash parameter storage production-ready: custom MTD ops (direct BD-DMA writes, XIP reads), D-cache invalidation before every read, mutex concurrency protection, read-back verification with 3 retries, erase spot-check. `param save` → reboot → `param show` verified on hardware ✓
 - `hardware/sam_sqi.h` added: SQI register definitions, BD descriptor struct, XIP base address, GCLK/MCLK IDs — all DFP-verified ✓
 - GCLK2 configured: PLL0/3 = 100 MHz → SQI1 core clock (`GCLK_PCHCTRL[57]`) ✓
+- SDMMC1 SD card logging: ADMA2 mode, 4-bit bus, GCLK4=100 MHz main + GCLK5=12 MHz slow, multi-block DMA up to 2.5 MB, 0 dropouts. Card detect on PC28 (GPIO active-LOW). Mount at `/fs/microsd` ✓
+- Pin-mux arbitration (SQI1 mux=7 ↔ SDMMC1 mux=8): SQI loads params at boot, then remuxes to SDMMC1 for logging ✓
+- SPI master (SERCOM3): `sam_spi.c` polled-mode driver, `hardware/sam_sercom_spi.h` DFP-verified, GCLK2=100 MHz, pins PC12/PC13/PC14/PC15 func C. PX4 bus table in `spi.cpp` ✓
+- I2C master (SERCOM5): `sam_i2c_master.c` interrupt-driven driver, `hardware/sam_sercom_i2c.h` DFP-verified, GCLK2=100 MHz, 400 kHz bus, pins PC25=SDA/PC26=SCL func D. PX4 bus table in `i2c.cpp` ✓
+- DSU DID read: enables APB clock (MCLK_ID=1), reads 0x44000120, extracts REVISION[31:28] → `ver all` shows real silicon rev ✓
+- Chip UID (FUSES_CALOTP UNIQID): reads factory-programmed 96-bit serial from 0x0A0071E0 → `ver all` shows unique PX4GUID per board ✓
+- EIC driver (`sam_eic.c`): 16-channel async-mode external interrupt controller; GCLK3 for debounce; `px4_arch_gpiosetevent()` wired via `pic32czca90_gpiosetevent.c`; builds and links but NOT hardware-tested (no active DRDY consumer) ✓
 
 **Pending — by priority for a flying PX4 system:**
 
-> **Storage:** No internal PFM for params or caldata. SD card → flight logs (`/fs/microsd`).
-> SQI1 (SST26VF032BAT, 4 MB) → params/caldata/dataman (`/fs/mtd_params`, `/fs/mtd_caldata`,
-> `/fs/mtd_waypoints`). See `docs/sqi_filesystem.md` for the full MTD stack implementation guide.
+> **Storage (done):** SD card → flight logs (`/fs/microsd`). SQI1 → params/caldata/dataman.
+> **Sensors (verified on hardware):** ICM45686 (SPI3 DMA), BMI088 accel+gyro (I2C5 DMA), BMM150 mag (I2C5 DMA) — all 0 bad transfers.
 >
 > **DFP peripheral names (CA90 — do not use SAMD5x names):**
 > - SD/MMC controller → `SDMMC` (`component/sdmmc.h`) — not "SDHC" or "HSMCI"
@@ -464,50 +494,23 @@ Three files that NuttX core includes everywhere — critical to get right:
 >
 > **DFP location:** `C:/Users/I74182/.mchp_packs/Microchip/PIC32CZ-CA90_DFP/1.7.168/CA90/include/`
 
-#### P1 — SD Card Logging — ADMA2 mode (flight logs → /fs/microsd)
-> J700 PKOB4 console works for development — J200 USB (USBHS) is not needed yet.
-> SD card logging is the highest-value first step: immediately useful for debugging all
-> subsequent driver work.
+#### P1 — SD Card Logging — ADMA2 mode (flight logs → /fs/microsd) — DONE ✓
+> **Completed.** SDMMC1 ADMA2 mode working. Multi-block DMA up to 2.5 MB verified, 0 dropouts.
 >
-> **CRITICAL: Use SDMMC1, NOT SDMMC0.**
-> The Curiosity Ultra micro-SD socket is physically wired to SDMMC1 pins
+> **Hardware:** SDMMC1 (not SDMMC0). Micro-SD socket wired to SDMMC1 pins
 > (PC30/CLK, PG03/CMD, PC31/DAT0, PG00/DAT1, PG01/DAT2, PG02/DAT3, PC28/CD).
-> SDMMC0 (PC08–PC15) has no SD socket connection on this board.
 >
-> **CRITICAL: SDMMC1 and SQI1 share the same physical pins — mux=8 vs mux=7.**
-> At any given time only one peripheral can own them. Strategy:
-> - Boot: mux=7 (SQI1) — load params into RAM from flash
-> - After params loaded: re-mux to 8 (SDMMC1) — SD card logging
-> - Param save: re-mux to 7 (SQI1) briefly, write, re-mux back to 8
-> For Stage 1.1 alone (no SQI yet) params fall back to `/fs/microsd/etc/parameters`.
+> **Pin sharing:** SDMMC1 and SQI1 share physical pins (mux=8 vs mux=7).
+> Pin-mux arbitration code exists; SQI loads params first, then remuxes to SDMMC1.
 >
-> **HARDWARE DESIGN NOTE (future board revision):** The pin-mux arbitration between
-> SQI1 and SDMMC1 is a Curiosity Ultra dev board limitation — both peripherals are
-> routed to the same 6 physical pins (PC30/PC31/PG00-PG03). On a custom flight
-> controller PCB, route SQI1 and SDMMC1 to separate pin groups (the CA90 208-pin
-> package has alternate SDMMC0 on PC08-PC15 or SQI0 on separate pins). This eliminates
-> the mux switching overhead and the risk window during param save operations.
->
-> **Transfer mode:** ADMA2 (not CPU-polled PIO) — this is what Harmony `plib_sdmmc1.c` uses.
-> ADMA2 descriptor = `SDMMC_ADMA_DESCR`; `SDMMC_HC1R_DMASEL(2)` selects it.
-> `DCACHE_CLEAN_BY_ADDR()` on descriptor table before `SDMMC_ASAR` write.
->
-> **GCLK assignment (separate generators — do not share with GCLK1):**
+> **GCLK assignment:**
 > - SDMMC1 main clock: GCLK4 → 100 MHz (PLL0/3); `GCLK_PCHCTRL[60] = GEN(4)|CHEN`
 > - SDMMC1 slow clock: GCLK5 → 12 MHz (PLL0/25); `GCLK_PCHCTRL[61] = GEN(5)|CHEN`
-> - Harmony reference: `sdmmc_fat/plib_clock.c` uses GEN(1) and GEN(2) — adapt to our GCLK map.
 >
-> **Harmony reference files:** `core_apps_pic32cz_ca8x_ca9x/apps/fs/sdmmc_fat/firmware/src/`
-> — `plib_sdmmc1.c` is the canonical hardware init/DMA reference.
-> Variant ID: `sdmmc_44002` (identifiable by `SDMMC_DBGR_NIDBG` register unique to this IP).
->
-> **NuttX port base:** `arch/arm/src/sama5/sam_sdmmc.c` — same SDMMC IP, register names match CA90 DFP.
->
-- `hardware/sam_sdmmc.h` from DFP `component/sdmmc.h`; **SDMMC1** base `0x460A0000`, `GCLK_ID=60`, `GCLK_ID_SLOW=61`, `MCLK_ID_AHB=71`, `MCLK_ID_APB=72`
-- `sam_sdmmc.c` — **ADMA2 mode**; single descriptor handles up to 65536 bytes; no system DMA dependency
-- Board init: card detect on PC28 (GPIO, active LOW), `mmcsd_slotinitialize()`, `mkdir("/fs/microsd")`, `mount("/dev/mmcsd0", "/fs/microsd", "vfat")`
-- `board_app_initialize()`: SQI init first (if P2 done), SD card second
-- **Win:** `ls /fs/microsd` succeeds; `.ulg` log file written after armed flight
+- `hardware/sam_sdmmc.h` — DFP-verified; SDMMC1 base `0x460A0000`, `GCLK_ID=60`, `GCLK_ID_SLOW=61`, `MCLK_ID_AHB=71`, `MCLK_ID_APB=72` ✓
+- `sam_sdmmc.c` — ADMA2 mode; NuttX SDIO lower-half ✓
+- Board init: card detect on PC28, `mmcsd_slotinitialize()`, mount at `/fs/microsd` ✓
+- **Win:** `ls /fs/microsd` succeeds; logger writes with 0 dropouts ✓
 
 #### P2 — SQI Flash Parameter Storage (params/caldata/dataman) — DONE ✓
 > **Completed 2026-05-13.** Params persist across reboot (hardware-verified).
@@ -526,36 +529,53 @@ Three files that NuttX core includes everywhere — critical to get right:
 - `qspi.c` — custom MTD ops, D-cache invalidation, mutex, verification ✓
 - **Win:** `param set CBRK_SUPPLY_CHK 894281`; reboot; `param show` returns 894281 ✓
 
-#### P3 — System DMA
-> Needed for: DShot burst (Stage 7.1) + optional SDMMC DMA upgrade. Neither SQI nor
-> PIO SDMMC requires system DMA.
-- `hardware/sam_dma.h` from DFP `component/dma.h`; `MCLK_ID_AXI=24`, `MCLK_ID_APB=25`
-- `sam_dma.c` — BD-based transfer, NuttX `sam_dmachannel`/`sam_dmasetup`/`sam_dmastart` API
-- MPU nocache region at 0x200F0000 for BD structs (already reserved in linker)
-- **Cache coherency (critical):** TX: `up_clean_dcache()` + DMB **before** start;
-  RX: `up_invalidate_dcache()` **after** complete. Applies to BD structs too.
-- **Pin mux warning:** verify no DMA-backed peripheral pin overlaps before enabling;
-  shared-pin conflicts cause silent per-bit data corruption
-- **Win:** DMA memory-to-memory transfer test passes
+#### P3 — System DMA — DONE ✓
+> **Completed.** `sam_dmac.c` BD-based DMA driver. Used by I2C5 RX (1.6M+ transfers confirmed)
+> and SPI3 TX+RX dual-channel (ICM45686 FIFO bursts). NOINC flag for NULL-buffer handling.
+> MPU nocache region at 0x200F0000 for BD structs.
+>
+- `hardware/sam_dma.h` — DFP-verified register defs, trigger IDs, BD descriptor struct ✓
+- `sam_dmac.c` — BD-based transfer engine, NuttX `sam_dmachannel`/`sam_dmastart`/`sam_dmastop` API ✓
+- I2C5: RX DMA for bulk sensor FIFO reads; `i2c_stats` shows `dma_s=1.6M, dma_d=1.6M` ✓
+- SPI3: TX+RX dual-channel DMA with NOINC for NULL buffers; `icm45686: bad transfer: 0` ✓
 
-#### P4 — EIC (sensor DRDY interrupts)
-- `hardware/sam_eic.h` from DFP `component/eic.h`; `sam_eic.c`; GCLK channel 5 → GCLK3 (32 kHz)
-- `sam_eic_config(pin, sense)` for IMU DRDY on PA8 (rising edge); wire to NVIC
+#### P4 — EIC (External Interrupt Controller) — IMPLEMENTED, NOT HARDWARE-TESTED
+> **Implemented 2026-06-22.** Full EIC driver + PX4 gpiosetevent glue layer built and linked.
+> No active consumer — ICM45686 uses FIFO polling (no DRDY needed). Infrastructure ready
+> for future use (e.g. sensor with mandatory DRDY, or button/GPIO wake interrupts).
+>
+> **Architecture:** 16 EXTINT channels, each with dedicated NVIC vector (no software demux).
+> Async mode — edge detection does not require GCLK; GCLK3 (32 kHz) connected for optional debounce/filter.
+>
+- `hardware/sam_eic.h` — DFP-verified register definitions, base 0x44800000, GCLK_ID=5, MCLK_ID_APB=16 ✓
+- `sam_eic.c` — NuttX driver: init (APB+GCLK+SWRST), configure (sense/filter/async), disable, irq_ack ✓
+- `sam_eic.h` — public API header ✓
+- `pic32czca90_gpiosetevent.c` — PX4 glue: static handler table[16], pin→EXTINT mapping, NVIC attach ✓
+- `micro_hal.h` — `px4_arch_gpiosetevent` wired to real implementation (was `-ENOSYS` stub) ✓
+- `defconfig` — `CONFIG_PIC32CZCA90_EIC=y` ✓
+- `init.c` — `sam_eic_initialize()` called at boot under `#ifdef CONFIG_PIC32CZCA90_EIC` ✓
+- `board_config.h` — `GPIO_IMU_DRDY` defined (PA08, func A, EXTINT[8]) but unused in bus table ✓
+- **NOT tested on hardware** — no sensor currently triggers EXTINT; will validate when a DRDY-dependent peripheral is added
 
-#### P5 — SPI Master → IMU (SERCOM3)
-> **CRITICAL: SERCOM3 option A pins (PC12–PC15, mux D) conflict with SDMMC0 (PC08–PC15, mux I).**
-> SDMMC0 is not connected to any SD socket on the Curiosity Ultra, but the pin overlap still
-> exists in silicon. Use SERCOM3 **option B** pins instead — no conflicts:
-> - PD03 = PAD0 (MOSI), PD04 = PAD1 (SCK), PD05 = PAD2 (MISO), PD06 = PAD3 (CS) — all mux D=3
-- `hardware/sam_sercom_spi.h` from DFP `component/sercom.h` (CTRLA.MODE=2)
-- `sam_spi.c`; DMA-backed (P3); SERCOM3: **PD03/PD04/PD05/PD06** (option B, mux D), CS=PD06, DRDY=PA8 (EIC, P4)
-- Fix Kconfig: `PIC32CZCA90_SERCOM3_ISSPI` must `select PIC32CZCA90_HAVE_SPI`
-- **Win:** `icm42688p info` shows WHO_AM_I=0x47; `listener sensor_gyro` shows data at 2 kHz
+#### P5 — SPI Master → IMU (SERCOM3) — DONE ✓
+> **Completed.** SPI DMA driver on SERCOM3. GCLK2=100 MHz.
+> Pins: PC12=MOSI, PC13=SCK, PC14=CS (GPIO), PC15=MISO, function C.
+> ICM45686 running at full rate, 0 bad transfers, 0 FIFO overflows.
+>
+- `hardware/sam_sercom_spi.h` — DFP-verified register definitions ✓
+- `sam_spi.c` — NuttX `spi_dev_s` with TX+RX DMA (polled fallback for ≤4 bytes) ✓
+- `spi.cpp` — PX4 board SPI bus table and chip-select functions ✓
+- **Win:** `icm45686: bad transfer: 0` over 307k+ rate control cycles ✓
 
-#### P6 — I2C Master → Magnetometer + Barometer (SERCOM5)
-- `hardware/sam_sercom_i2c.h` from DFP `component/sercom.h` (CTRLA.MODE=4)
-- `sam_i2c_master.c`; SERCOM5: PC25=SDA, PC26=SCL; fix Kconfig `HAVE_I2C_MASTER` wiring
-- **Win:** `i2cdetect 5` shows ACK at 0x0E (mag) and 0x76 (baro); EKF2 converges
+#### P6 — I2C Master → Magnetometer + Barometer (SERCOM5) — DONE ✓
+> **Completed.** Interrupt-driven I2C master with RX DMA on SERCOM5. GCLK2=100 MHz, 400 kHz bus.
+> Pins: PC25=SDA (PAD0), PC26=SCL (PAD1), function D.
+> BMI088 accel+gyro + BMM150 mag running, 0 bad transfers, 1.6M+ DMA completions.
+>
+- `hardware/sam_sercom_i2c.h` — DFP-verified register definitions ✓
+- `sam_i2c_master.c` — NuttX `i2c_master_s` ISR + RX DMA driver ✓
+- `i2c.cpp` — PX4 board I2C bus table ✓
+- **Win:** `i2c_stats` shows `dma_s=1605923, dma_d=1605922` (1 in-flight); 0 bad transfers ✓
 
 #### P7 — PWM / TCC (motor outputs)
 - `hardware/sam_tcc.h` ✓ done. Need CCBUF/PATTBUF for TCC1/TCC2 PWM channels
@@ -588,17 +608,13 @@ Three files that NuttX core includes everywhere — critical to get right:
 
 #### P12 — Safety / Misc
 - `hardware/sam_wdt.h` from DFP `component/wdt.h`; `sam_wdt.c` — 4 s timeout, EWINT at 2 s
-- DSU: `MCLK_ID_AHB=0`, `MCLK_ID_APB=1`; un-stub `board_mcu_version()` / `board_get_uuid32()`
+- ~~DSU: un-stub `board_mcu_version()` / `board_get_uuid32()`~~ — **DONE ✓** (DID at 0x44000120, UID at 0x0A0071E0)
 
 **Missing register headers** (drivers blocked until these exist):
 
 | Header needed              | DFP source                  | Blocks              |
 |----------------------------|-----------------------------|---------------------|
-| `hardware/sam_dma.h`       | `component/dma.h`           | System DMA (P3)     |
-| `hardware/sam_eic.h`       | `component/eic.h`           | EIC driver (P4)     |
-| `hardware/sam_sercom_spi.h`| `component/sercom.h`        | SPI driver (P5)     |
-| `hardware/sam_sercom_i2c.h`| `component/sercom.h`        | I2C driver (P6)     |
-| `hardware/sam_usbhs.h`     | `component/usbhs.h`         | USB HS driver (P8)  |
+| `hardware/sam_usbhs.h`     | `component/usbhs.h`        | USB HS driver (P8)  |
 | `hardware/sam_adc.h`       | `component/adc.h`           | ADC driver (P10)    |
 | `hardware/sam_mcan.h`      | `component/can.h`           | CAN-FD driver (P11) |
 | `hardware/sam_wdt.h`       | `component/wdt.h`           | Watchdog (P12)      |
