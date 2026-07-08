@@ -148,46 +148,16 @@ void arm_addregion(void)
 #endif
 
 /************************************************************************************
- * Name: arm_usbinitialize
+ * Name: board_read_VBUS_state
  *
  * Description:
- *   Called from NuttX up_initialize() when USB is enabled.
- *   Stub — no USB peripheral driver for PIC32CZ CA90 yet.
- ************************************************************************************/
-
-#if defined(CONFIG_USBDEV) || defined(CONFIG_USBHOST)
-void arm_usbinitialize(void)
-{
-}
-#endif
-
-/************************************************************************************
- * Name: board_read_VBUS_state
+ *   J200 Target USB has no VBUS sense GPIO — always report connected.
  ************************************************************************************/
 
 int board_read_VBUS_state(void)
 {
 	return 0;
 }
-
-/************************************************************************************
- * USB device controller stubs — no USB peripheral driver for PIC32CZ CA90 yet.
- * These allow the build to link with CONFIG_USBDEV=y / CONFIG_CDCACM=y.
- ************************************************************************************/
-
-#ifdef CONFIG_USBDEV
-int usbdev_register(FAR struct usbdevclass_driver_s *driver)
-{
-	(void)driver;
-	return -ENODEV;
-}
-
-int usbdev_unregister(FAR struct usbdevclass_driver_s *driver)
-{
-	(void)driver;
-	return -ENODEV;
-}
-#endif
 
 /************************************************************************************
  * Name: board_peripheral_reset

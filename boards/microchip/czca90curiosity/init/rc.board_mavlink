@@ -1,7 +1,5 @@
 #!/bin/sh
 #
-# MAVLink enabled on USB CDC/ACM
-# Note: USB CDC/ACM driver not yet implemented for CA90.
-# sercon / MAVLink startup is disabled until USB driver is ported.
-
-echo "INFO: USB CDC/ACM not yet available on CA90 - MAVLink disabled"
+# MAVLink on USB CDC/ACM — handled by cdcacm_autostart module.
+# SYS_USB_AUTO=2 triggers MAVLink when a USB host connects.
+#

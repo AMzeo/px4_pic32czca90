@@ -33,7 +33,7 @@
  *
  *   GCLK3 (SRC=3=OSCULP32K, DIV=1) → 32.768 kHz → SERCOM slow, WDT
  *
- *   XOSC0 (12 MHz MEMS) is on the board but not used (BOARD_HAVE_XOSC0=0).
+ *   XOSC0 (12 MHz MEMS) enabled for USBHS PHY reference (USBHSDIV=1 → 12 MHz).
  *   BOARD_DPLL0_ENABLE=FALSE; PLL0 is initialized by sam_pll0_init().
  */
 
@@ -92,16 +92,14 @@
 
 /* XOSC0 - 12 MHz MEMS oscillator (XTALEN=0 = external clock, not crystal) */
 
-#define BOARD_HAVE_XOSC0         0
-#define BOARD_XOSC0_ENABLE       FALSE
+#define BOARD_HAVE_XOSC0         1
+#define BOARD_XOSC0_ENABLE       TRUE
 #define BOARD_XOSC0_XTALEN       FALSE     /* MEMS oscillator, NOT crystal */
-#define BOARD_XOSC0_RUNSTDBY     FALSE
 #define BOARD_XOSC0_ONDEMAND     FALSE
-#define BOARD_XOSC0_LOWGAIN      FALSE
-#define BOARD_XOSC0_ENALC        FALSE
 #define BOARD_XOSC0_CFDEN        FALSE
 #define BOARD_XOSC0_SWBEN        FALSE
-#define BOARD_XOSC0_STARTUP      0
+#define BOARD_XOSC0_STARTUP      14        /* Max startup time for stable MEMS */
+#define BOARD_XOSC0_USBHSDIV     1         /* div-by-1: 12 MHz to USB PHY PLL */
 
 /* GCLK configuration
  *

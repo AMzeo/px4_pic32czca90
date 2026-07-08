@@ -100,10 +100,10 @@ Current build size: ~911 KB flash (10.9% of 8 MB), ~46 KB SRAM (5.5% of 832 KB).
 
 **USB connectors on the PIC32CZ CA90 Curiosity Ultra board (EV16W43A):**
 
-| Connector | Purpose | Linux device |
-|-----------|---------|--------------|
-| J700 — PKOB4 debug USB | NSH console (SERCOM1, 115200 baud) | `/dev/ttyACM0` |
-| J200 — Target USB | MAVLink CDC/ACM (when USB working) | `/dev/ttyACM1` |
+| Connector | Purpose | Host device |
+|-----------|---------|-------------|
+| J200 — PKOB4 debug USB | NSH console (SERCOM1, 115200 baud) | `/dev/ttyACM0` (Linux) |
+| J102 — Target USB | MAVLink CDC-ACM (USBHS0, 480 Mbps HS) | COM port (Windows) |
 
 ```bash
 # Open NSH console
@@ -312,6 +312,10 @@ When any clock frequency, GCLK source, SERCOM pin, or baud rate changes — upda
 | SQI param save: value not persisting across reboot | `boards/microchip/czca90curiosity/src/qspi.c` | `param set X 99999; param save; reboot; param show X` → value reverted to default. BSON import showed empty file (5 bytes). No error messages on save. | Root cause: D-cache coherency. FTL read-modify-write cycle read stale cached XIP data (old flash contents) and wrote it back, overwriting the just-saved param. Fix: (1) D-cache invalidate before every XIP read; (2) remove unnecessary XIP re-entry between erase/write; (3) mutex for concurrency; (4) read-back verification with 3 retries; (5) static buffers → stack-local |
 | I2C ISR missing SYNCBUSY waits | `sam_i2c_master.c` | I2C probes work (init context) but ALL work-queue periodic transfers timeout (50ms). System crashes at timeout syslog print → looks like "SYNCBUSY caused hang" but it's actually stack overflow on 2336-byte wq:I2C5 stack from syslog() with 9 format args. Root cause masked for days. | Fix: (1) SYNCBUSY wait after EVERY write to ADDR, DATA, CTRLB in ISR — matching Harmony `plib_sercom0_i2c_master.c` exactly; (2) Replace `syslog()` with `_alert()` in timeout path (stack-safe polled output); (3) Sem drain `while(nxsem_trywait()==OK)` before each transfer prevents stale post from causing immediate return mid-bus-activity |
 | I2C bus stuck after software reboot | `sam_i2c_master.c` | All I2C sensors fail to probe after `reboot` command (but work on fresh flash). Intermittent — ~50% of reboots fail. No timeout message printed (system hangs at probe). | Root cause: software reboot resets CPU but NOT I2C slaves. If slave was mid-byte (SDA low), it stays low forever waiting for SCL clocks. SERCOM init forces BUSSTATE=IDLE in STATUS register, but that only affects the master's state machine — doesn't fix physical SDA held low. Fix: I2C bus recovery (9 SCL clock pulses as GPIO) before SERCOM init. Standard procedure per I2C spec §3.1.16. |
+| USB HS: TXCSRH.MODE not set | `sam_usb.c` | EP1+ TX interrupt (INTRTX) never fires — `epn_tx` increments but `tx_done` stays 0; host never receives bulk data | DFP confirms: TXCSRH.MODE (bit 5) = "Enable Endpoint Direction As TX". Must be set for all TX endpoints in device mode. Without it MUSB core doesn't generate INTRTX for EP1+. |
+| USB HS: HSENABLE not set in POWER | `sam_usb.c` | Device enumerates at Full Speed only (12 Mbps); HSMODE=0 in POWER register | POWER.HSENABLE (bit 5) must be set before SOFTCONN to enable HS chirp signaling during bus reset |
+| USB HS: H2D data phase ordering wrong | `sam_usb.c` | QGC "device not functioning" at HS; GET_LINE_CODING returns baud=8225/databits=7 (SETUP packet bytes leaked into linecoding struct); Windows CDC driver rejects device | Root cause: CLASS_SETUP called for SET_LINE_CODING BEFORE receiving the 7-byte OUT data phase. NuttX CDC immediately reads `dataout` (= ep0buf still containing SETUP bytes) into `priv->linecoding`. Fix: receive OUT data into ep0buf first, THEN call CLASS_SETUP with real data. |
+| USB HS: No DISCON handler | `sam_usb.c` | Board hangs completely on cable unplug — CPU stuck in ISR from PHY oscillation | INTRUSB.DISCON fires on cable removal; without handler, continuous interrupts flood NVIC. Fix: disable SOFTCONN, mask EPn interrupts, call CLASS_DISCONNECT. |
 
 ### I2C Driver — Production Rules for CA90 SERCOM
 
@@ -577,19 +581,40 @@ Three files that NuttX core includes everywhere — critical to get right:
 - `i2c.cpp` — PX4 board I2C bus table ✓
 - **Win:** `i2c_stats` shows `dma_s=1605923, dma_d=1605922` (1 in-flight); 0 bad transfers ✓
 
-#### P7 — PWM / TCC (motor outputs)
-- `hardware/sam_tcc.h` ✓ done. Need CCBUF/PATTBUF for TCC1/TCC2 PWM channels
-- `sam_oneshot.c`, `sam_freerun.c`, TCC PWM driver, PX4 `io_timer` abstraction
-- **Pin conflict check:** confirm no PWM pin overlaps with SDMMC/SQI pins before enabling
-- **Win:** `pwm test -c 1234 -p 1100`; oscilloscope shows 1.1 ms pulse on all 4 outputs
+#### P7 — PWM / TCC (motor outputs) — DONE ✓
+> **Completed 2026-06-26.** 4 PWM channels verified on oscilloscope at 403 Hz.
+> TCC1 WO0/WO1 (PB10/PB11, EXT1) + TCC7 WO0/WO1 (PA22/PA23, EXT2).
+> CC direct writes + SYNCBUSY poll — CCBUF causes bus stall (no SYNCBUSY bit).
+> DShot future: DMA→CCBUF is hardware-paced (1670ns gap >> 20ns sync), safe.
+>
+- `io_timer_tcc.c` — full PX4 io_timer API: init, set_ccr, set_pwm_rate, enable/disable ✓
+- `io_timer_hw_description.h` — constexpr helpers for TCC1/TCC7 ✓
+- `timer_config.cpp` — board pin mapping (TCC1 ch0/1 + TCC7 ch0/1) ✓
+- `rc.board_defaults` — `PWM_MAIN_TIM0=400`, `PWM_MAIN_TIM1=400`, FUNC1-4=101-104 ✓
+- **Win:** `actuator_test set -m 1 -v 0.5` → 1487µs pulse; all 4 channels respond ✓
 
-#### P8 — USBHS Device Driver (MAVLink + QGroundControl over J200)
-> Required before first hover: QGroundControl calibration (compass, accel, level) and
-> MAVLink arming verification need USBHS. J700 console alone is insufficient for this.
-- `hardware/sam_usbhs.h` from DFP `component/usbhs.h`; USBHS0 `MCLK_ID_AHB=73`
-- `sam_usbhs.c` — NuttX `usbdev_s` lower-half; USB clock via OSCCTRL (no GCLK needed)
-- Remove `-ENODEV` stubs in `init.c`; enable `CONFIG_USBDEV=y`, `CONFIG_CDCACM=y`
-- **Win:** `/dev/ttyACM1` appears on host; QGroundControl receives MAVLink heartbeat
+#### P8 — USBHS Device Driver (MAVLink + QGroundControl over J102) — DONE ✓
+> **Completed 2026-07-08.** USB High Speed 480 Mbps, QGC connected, bidirectional MAVLink,
+> txerr=0, gyro calibration done through QGC, disconnect/reconnect stable.
+>
+> **Architecture:** MUSB-based USBHS0 (base 0x4F010000) with wrapper + core registers.
+> Single NVIC vector (SAM_IRQ_USBHS0 = EXTINT+213) handles all events (USB core + DMA).
+> USBHS1 (IRQ 214) is a second controller, unused on this board.
+>
+> **Key bugs fixed:**
+> - TXCSRH.MODE (bit 5) must be set for TX endpoints — without it, INTRTX never fires
+> - POWER.HSENABLE required before SOFTCONN for 480 Mbps chirp negotiation
+> - H2D control transfer data phase: must receive OUT data BEFORE calling CLASS_SETUP
+>   (root cause of QGC "device not functioning" — linecoding struct got SETUP packet bytes)
+> - DISCON handler: disable SOFTCONN + mask EPn interrupts on cable pull (prevents ISR storm)
+> - ISR ordering: read MUSB registers before clearing wrapper INTFLAG (prevents missed interrupts)
+> - Removed hardcoded device descriptor bypass (all descriptors via NuttX CLASS_SETUP)
+>
+- `hardware/sam_usbhs.h` — DFP-verified wrapper + MUSB register defs, DMA channel regs ✓
+- `sam_usb.c` — NuttX `usbdev_s` lower-half; EP0 state machine, PIO bulk TX/RX, DMA (disabled) ✓
+- `usb_diag.c` — NSH debug command (register dump, EP config, ISR counters, EP0 trace ring) ✓
+- defconfig: `CONFIG_USBDEV=y`, `CONFIG_USBDEV_DUALSPEED=y`, `CONFIG_CDCACM=y` ✓
+- **Win:** QGC connects at 480 Mbps HS; `mavlink status` shows txerr=0, GCS heartbeat valid ✓
 
 #### P9 — PROGMEM Crash Log (crash survives reboot)
 - `sam_progmem.c` — `up_progmem_*` API using `hardware/sam_fcw.h` (already exists)

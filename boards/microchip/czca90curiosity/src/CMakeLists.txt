@@ -48,6 +48,14 @@ px4_add_module(
 		i2c_stats.c
 )
 
+# USB register diagnostic — 'usb_diag'
+px4_add_module(
+	MODULE board_usb_diag
+	MAIN usb_diag
+	SRCS
+		usb_diag.c
+)
+
 
 if(CONFIG_PIC32CZCA90_SQI1)
 	# SQI flash write path test — 'sqi_test'
