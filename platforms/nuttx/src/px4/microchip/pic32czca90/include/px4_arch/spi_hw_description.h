@@ -32,7 +32,7 @@ enum Pin {
 namespace SPI
 {
 enum class Bus {
-	SPI3 = 3,
+	SPI8 = 8,
 };
 
 struct CS {

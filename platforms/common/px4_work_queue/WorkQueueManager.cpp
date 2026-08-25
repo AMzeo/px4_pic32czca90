@@ -161,6 +161,10 @@ device_bus_to_wq(uint32_t device_id_int)
 		case 5: return wq_configurations::SPI5;
 
 		case 6: return wq_configurations::SPI6;
+
+		case 7: return wq_configurations::SPI7;
+
+		case 8: return wq_configurations::SPI8;
 		}
 	}
 

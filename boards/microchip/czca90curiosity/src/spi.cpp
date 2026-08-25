@@ -27,11 +27,11 @@ static constexpr px4_spi_bus_device_t make_spidev(uint32_t drvtype, uint32_t cs_
 constexpr px4_spi_bus_t px4_spi_buses[SPI_BUS_MAX_BUS_ITEMS] = {
 	{
 		.devices = {
-			make_spidev(DRV_IMU_DEVTYPE_ICM45686, GPIO_SPI3_CS_IMU, 0),
-			make_spidev(DRV_IMU_DEVTYPE_ICM20689, GPIO_SPI3_CS_IMU, 0),
+			make_spidev(DRV_IMU_DEVTYPE_ICM45686, GPIO_SPI8_CS_IMU, 0),
+			make_spidev(DRV_IMU_DEVTYPE_ICM20689, GPIO_SPI8_CS_IMU, 0),
 		},
 		.power_enable_gpio = 0,
-		.bus = static_cast<int8_t>(SPI::Bus::SPI3),
+		.bus = static_cast<int8_t>(SPI::Bus::SPI8),
 		.is_external = false,
 		.requires_locking = false,
 	},
@@ -39,7 +39,7 @@ constexpr px4_spi_bus_t px4_spi_buses[SPI_BUS_MAX_BUS_ITEMS] = {
 
 extern "C" {
 
-void pic32czca90_spi3select(FAR struct spi_dev_s *dev, uint32_t devid,
+void pic32czca90_spi8select(FAR struct spi_dev_s *dev, uint32_t devid,
 			    bool selected)
 {
 	for (const auto &device : px4_spi_buses[0].devices) {
@@ -49,14 +49,16 @@ void pic32czca90_spi3select(FAR struct spi_dev_s *dev, uint32_t devid,
 
 		if (device.devid == devid) {
 			px4_arch_gpiowrite(device.cs_gpio, !selected);
+			if (selected) { up_udelay(2); } /* 2 µs CS-to-CLK setup */
 			return;
 		}
 	}
 
-	px4_arch_gpiowrite(GPIO_SPI3_CS_IMU, !selected);
+	px4_arch_gpiowrite(GPIO_SPI8_CS_IMU, !selected);
+	if (selected) { up_udelay(2); }
 }
 
-uint8_t pic32czca90_spi3status(FAR struct spi_dev_s *dev, uint32_t devid)
+uint8_t pic32czca90_spi8status(FAR struct spi_dev_s *dev, uint32_t devid)
 {
 	(void)dev;
 	(void)devid;

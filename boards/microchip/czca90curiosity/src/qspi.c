@@ -32,6 +32,7 @@
 #include <px4_platform_common/px4_config.h>
 #include <px4_platform_common/log.h>
 #include <nuttx/config.h>
+#include <debug.h>
 
 #ifdef CONFIG_PIC32CZCA90_SQI1
 
@@ -39,11 +40,14 @@
 #include <stdbool.h>
 #include <errno.h>
 #include <string.h>
+#include <unistd.h>
+#include <malloc.h>
 
 #include <nuttx/spi/spi.h>
 #include <nuttx/mtd/mtd.h>
 #include <nuttx/drivers/drivers.h>
 #include <nuttx/mutex.h>
+#include <nuttx/fs/fs.h>
 #include <sys/mount.h>
 
 #include <px4_platform_common/px4_mtd.h>
@@ -53,6 +57,7 @@
 #include <nuttx/cache.h>
 
 #include "board_config.h"
+#include "arm_internal.h"
 
 /* sam_sqibus_initialize, sam_sqi_xip_enable, sam_sqi_flash_cmd_write */
 #include "sam_sqi.h"
@@ -85,43 +90,6 @@ static const struct qspi_part_s g_qspi_parts[QSPI_NUM_PARTITIONS] =
 static struct mtd_dev_s *g_qspi_mtd = NULL;
 static mutex_t g_sqi_mtd_lock = NXMUTEX_INITIALIZER;
 
-#ifdef CONFIG_PIC32CZCA90_SDMMC1
-static bool g_sdmmc1_active = false;
-
-static void pins_to_sqi1(void)
-{
-  if (!g_sdmmc1_active) { return; }
-
-  sam_portconfig(PORT_SQI1_CLK);
-  sam_portconfig(PORT_SQI1_CS0);
-  sam_portconfig(PORT_SQI1_IO0);
-  sam_portconfig(PORT_SQI1_IO1);
-  sam_portconfig(PORT_SQI1_IO2);
-  sam_portconfig(PORT_SQI1_IO3);
-}
-
-static void pins_to_sdmmc1(void)
-{
-  if (!g_sdmmc1_active) { return; }
-
-  sam_portconfig(PORT_SDMMC1_CLK);
-  sam_portconfig(PORT_SDMMC1_CMD);
-  sam_portconfig(PORT_SDMMC1_DAT0);
-#  ifdef CONFIG_PIC32CZCA90_SDMMC1_WIDTH_D1_D4
-  sam_portconfig(PORT_SDMMC1_DAT1);
-  sam_portconfig(PORT_SDMMC1_DAT2);
-  sam_portconfig(PORT_SDMMC1_DAT3);
-#  endif
-}
-
-void board_qspi_set_sdmmc_active(bool active)
-{
-  g_sdmmc1_active = active;
-}
-#else
-static inline void pins_to_sqi1(void) {}
-static inline void pins_to_sdmmc1(void) {}
-#endif /* CONFIG_PIC32CZCA90_SDMMC1 */
 
 /* PX4 MTD registration state */
 static mtd_instance_s         g_mtd_instance;
@@ -205,11 +173,9 @@ static ssize_t qspi_xip_read(FAR struct mtd_dev_s *dev, off_t offset,
   uintptr_t xip_addr = SAM_SQI1_XIP_BASE + (uintptr_t)offset;
 
   nxmutex_lock(&g_sqi_mtd_lock);
-  pins_to_sqi1();
   sam_sqi_enter_xip();
   qspi_dcache_invalidate(xip_addr, nbytes);
   xip_word_copy(buffer, xip_addr, nbytes);
-  pins_to_sdmmc1();
   nxmutex_unlock(&g_sqi_mtd_lock);
   return (ssize_t)nbytes;
 }
@@ -222,11 +188,9 @@ static ssize_t qspi_xip_bread(FAR struct mtd_dev_s *dev, off_t startblock,
   uintptr_t xip_addr = SAM_SQI1_XIP_BASE + (uintptr_t)offset;
 
   nxmutex_lock(&g_sqi_mtd_lock);
-  pins_to_sqi1();
   sam_sqi_enter_xip();
   qspi_dcache_invalidate(xip_addr, nbytes);
   xip_word_copy(buffer, xip_addr, nbytes);
-  pins_to_sdmmc1();
   nxmutex_unlock(&g_sqi_mtd_lock);
   return (ssize_t)nblocks;
 }
@@ -262,8 +226,6 @@ static int qspi_jedec_probe(struct spi_dev_s *spi)
       PX4_ERR("sam_sqi_flash_cmd_read failed: %d", ret);
       return -1;
     }
-
-  PX4_INFO("SQI1 JEDEC: %02X %02X %02X", jedec[0], jedec[1], jedec[2]);
 
   if (jedec[0] != 0xBF || jedec[1] != 0x26 || jedec[2] != 0x42)
     {
@@ -323,40 +285,31 @@ static int qspi_wait_write_complete(void)
 static int qspi_mtd_erase(FAR struct mtd_dev_s *dev, off_t startblock,
                            size_t nblocks)
 {
-  uint8_t cmd[256];
+  uint8_t cmd[4];
   size_t i;
 
   nxmutex_lock(&g_sqi_mtd_lock);
-  pins_to_sqi1();
 
   for (i = 0; i < nblocks; i++)
     {
       uint32_t addr = (uint32_t)(startblock + i) * SST26_SECTOR_SIZE;
 
-      /* Pad SE to 256 bytes — BD processor drops short (4-byte) TX BDs
-       * from param save context but transmits long (260-byte) PP correctly.
-       * Flash ignores trailing 0xFF after the 4-byte SE command. */
-
-      memset(cmd, 0xFF, sizeof(cmd));
       cmd[0] = SST26_CMD_SE;
       cmd[1] = (addr >> 16) & 0xFF;
       cmd[2] = (addr >> 8) & 0xFF;
       cmd[3] = addr & 0xFF;
-      sam_sqi_flash_wren_cmd(cmd, 256);
+      sam_sqi_flash_wren_cmd(cmd, 4);
 
       sam_sqi_flash_rdsr();
 
       int ret = qspi_wait_write_complete();
       if (ret < 0)
         {
-          pins_to_sdmmc1();
           nxmutex_unlock(&g_sqi_mtd_lock);
           return ret;
         }
 
       qspi_dcache_invalidate(SAM_SQI1_XIP_BASE + addr, SST26_SECTOR_SIZE);
-
-      /* Verify erase: spot-check first 4 bytes are 0xFF */
 
       sam_sqi_enter_xip();
       volatile uint32_t *check = (volatile uint32_t *)(SAM_SQI1_XIP_BASE + addr);
@@ -364,13 +317,11 @@ static int qspi_mtd_erase(FAR struct mtd_dev_s *dev, off_t startblock,
         {
           PX4_ERR("ERASE: verify failed at 0x%06x (got 0x%08x)",
                   (unsigned)addr, (unsigned)*check);
-          pins_to_sdmmc1();
           nxmutex_unlock(&g_sqi_mtd_lock);
           return -EIO;
         }
     }
 
-  pins_to_sdmmc1();
   nxmutex_unlock(&g_sqi_mtd_lock);
   return (int)nblocks;
 }
@@ -383,7 +334,6 @@ static ssize_t qspi_mtd_bwrite(FAR struct mtd_dev_s *dev, off_t startblock,
   size_t i;
 
   nxmutex_lock(&g_sqi_mtd_lock);
-  pins_to_sqi1();
 
   for (i = 0; i < nblocks; i++)
     {
@@ -403,7 +353,6 @@ static ssize_t qspi_mtd_bwrite(FAR struct mtd_dev_s *dev, off_t startblock,
                       wel, (int)(startblock + i), attempt);
               if (attempt == 2)
                 {
-                  pins_to_sdmmc1();
                   nxmutex_unlock(&g_sqi_mtd_lock);
                   return -EIO;
                 }
@@ -420,12 +369,9 @@ static ssize_t qspi_mtd_bwrite(FAR struct mtd_dev_s *dev, off_t startblock,
           int ret = qspi_wait_write_complete();
           if (ret < 0)
             {
-              pins_to_sdmmc1();
               nxmutex_unlock(&g_sqi_mtd_lock);
               return ret;
             }
-
-          /* Verify: read back via XIP and compare */
 
           qspi_dcache_invalidate(SAM_SQI1_XIP_BASE + addr, SST26_PAGE_SIZE);
           sam_sqi_enter_xip();
@@ -436,19 +382,32 @@ static ssize_t qspi_mtd_bwrite(FAR struct mtd_dev_s *dev, off_t startblock,
               break;
             }
 
-          PX4_ERR("BWRITE: verify mismatch blk=%d attempt=%d",
-                  (int)(startblock + i), attempt);
+          /* Find first diverging byte */
+          {
+            size_t off;
+            for (off = 0; off < SST26_PAGE_SIZE; off++)
+              {
+                if (verify[off] != src[off])
+                  {
+                    break;
+                  }
+              }
+            PX4_ERR("BWRITE: mismatch blk=%d att=%d off=%d src=%02x got=%02x (page src[0..3]=%02x%02x%02x%02x got[0..3]=%02x%02x%02x%02x)",
+                    (int)(startblock + i), attempt, off,
+                    (off < SST26_PAGE_SIZE) ? src[off] : 0xAA,
+                    (off < SST26_PAGE_SIZE) ? verify[off] : 0xBB,
+                    src[0], src[1], src[2], src[3],
+                    verify[0], verify[1], verify[2], verify[3]);
+          }
         }
 
       if (attempt == 3)
         {
-          pins_to_sdmmc1();
           nxmutex_unlock(&g_sqi_mtd_lock);
           return -EIO;
         }
     }
 
-  pins_to_sdmmc1();
   nxmutex_unlock(&g_sqi_mtd_lock);
   return (ssize_t)nblocks;
 }
@@ -605,6 +564,8 @@ int board_qspi_create_partitions(struct mtd_dev_s *mtd)
           return -ENOMEM;
         }
 
+      _alert("qspi: part[%d] mtd_partition OK\n", i);
+
       ret = ftl_initialize(i, part);
       if (ret < 0)
         {
@@ -612,7 +573,10 @@ int board_qspi_create_partitions(struct mtd_dev_s *mtd)
           return ret;
         }
 
+      _alert("qspi: part[%d] ftl_initialize OK\n", i);
+
       snprintf(blkdev, sizeof(blkdev), "/dev/mtdblock%d", i);
+
       ret = bchdev_register(blkdev, p->path, false);
       if (ret < 0)
         {
@@ -620,13 +584,15 @@ int board_qspi_create_partitions(struct mtd_dev_s *mtd)
           return ret;
         }
 
+      _alert("qspi: part[%d] bchdev_register OK\n", i);
+
       g_block_counts[i] = (int)(p->size_esect * blkpererase);
       g_part_types[i]   = p->mtd_type;
       g_part_names[i]   = p->path;
-
-      PX4_INFO("MTD partition %d: %s (%d KB)",
-               i, p->path, p->size_esect * 4);
     }
+
+  _alert("board_qspi_create_partitions: all %d partitions created\n",
+         QSPI_NUM_PARTITIONS);
 
   memset(&g_mtd_instance, 0, sizeof(g_mtd_instance));
   g_mtd_instance.mtd_dev                = mtd;
@@ -636,6 +602,7 @@ int board_qspi_create_partitions(struct mtd_dev_s *mtd)
   g_mtd_instance.n_partitions_current   = QSPI_NUM_PARTITIONS;
 
   px4_mtd_register_instance(&g_mtd_instance);
+
   return OK;
 }
 

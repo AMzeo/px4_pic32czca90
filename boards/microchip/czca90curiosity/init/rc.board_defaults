@@ -1,9 +1,10 @@
 #!/bin/sh
 # PIC32CZ CA90 Curiosity Ultra board defaults
 
-# Parameter storage: SD card (/fs/microsd/params) while testing SDMMC in isolation.
-# SQI flash (MTD) disabled temporarily - will re-enable with re-init dance for coexistence.
-# rc.filepaths already sets PARAM_FILE=/fs/microsd/params via CONFIG_BOARD_PARAM_FILE.
+echo "RAWTEST rc.board_defaults entered"
+
+# Storage: SQI1 flash = params/caldata/dataman (/fs/mtd_params)
+#          SDMMC0 = flight logs (/fs/microsd)
 
 if [ -d "/fs/microsd" ]
 then
@@ -15,25 +16,29 @@ fi
 # USB CDC/ACM driver not yet implemented - disable cdcacm_autostart.
 # NOTE: param set-default does NOT override the active in-memory value when
 # param import fails (no storage). param set forces the value for this session.
-param set-default SYS_AUTOSTART 0
+param set SYS_AUTOSTART 4001
 param set-default SYS_USB_AUTO 2
 param set-default USB_MAV_MODE 0
-param set-default MAV_0_RATE 57600
-param set-default MAV_0_FORWARD 0
-param set-default SDLOG_MODE -1
+param set-default SDLOG_MODE 0
+
+# Disable GPS and RC input — no devices connected on fresh board.
+# These default to valid serial ports which block boot waiting for data.
+param set GPS_1_CONFIG 0
+param set GPS_2_CONFIG 0
+param set RC_PORT_CONFIG 0
+
 
 # No sensors connected during initial bringup - disable checks that require them.
-# Change to 1 when physical hardware is installed.
-param set-default SYS_HAS_MAG 0
-param set-default SYS_HAS_BARO 0
-param set-default COM_ARM_SDCARD 0
+param set SYS_HAS_MAG 0
+param set SYS_HAS_BARO 0
+param set COM_ARM_SDCARD 0
 
 # Circuit breakers to allow arming without full sensor suite
-param set-default CBRK_SUPPLY_CHK 894281
-param set-default COM_ARM_WO_GPS 1
+param set CBRK_SUPPLY_CHK 894281
+param set COM_ARM_WO_GPS 1
 
 # Circuit breaker for flight termination (required for HITL)
-param set-default CBRK_FLIGHTTERM 121212
+param set CBRK_FLIGHTTERM 121212
 
 # HITL actuator output configuration (quadcopter)
 param set-default HIL_ACT_FUNC1 101

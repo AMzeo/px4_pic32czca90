@@ -55,6 +55,7 @@ set PARAM_DEFAULTS_VER 1
 #
 if [ -b "/dev/mmcsd0" ]
 then
+	usleep 500000
 	if mount -t vfat /dev/mmcsd0 /fs/microsd
 	then
 		if [ -f "/fs/microsd/.format" ]
@@ -253,15 +254,15 @@ else
 	fi
 
 	# Check parameter version and reset upon airframe configuration version mismatch.
-	# Reboot required because "param reset_all" would reset all "param set" lines from airframe.
-	if ! param compare SYS_PARAM_VER ${PARAM_DEFAULTS_VER}
-	then
-		echo "Switched to different parameter version. Resetting parameters."
-		param set SYS_PARAM_VER ${PARAM_DEFAULTS_VER}
-		param set SYS_AUTOCONFIG 1
-		param save
-		reboot
-	fi
+	# DISABLED: SYS_PARAM_VER not defined in this build; param save during boot hangs CA90.
+	# if ! param compare SYS_PARAM_VER ${PARAM_DEFAULTS_VER}
+	# then
+	# 	echo "Switched to different parameter version. Resetting parameters."
+	# 	param set SYS_PARAM_VER ${PARAM_DEFAULTS_VER}
+	# 	param set SYS_AUTOCONFIG 1
+	# 	param save
+	# 	reboot
+	# fi
 
 	#
 	# Start the tone_alarm driver.
@@ -514,7 +515,10 @@ else
 	# mavlink stop-all >/dev/null 2>&1
 
 	# Must be started after the serial config is read
-	rc_input start $RC_INPUT_ARGS
+	if [ "$RC_INPUT_ARGS" != "" ]
+	then
+		rc_input start $RC_INPUT_ARGS
+	fi
 
 	# Manages USB interface
 	# RE-ENABLED: USB CDC/ACM now configured properly

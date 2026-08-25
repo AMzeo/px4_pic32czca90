@@ -60,6 +60,8 @@ static constexpr wq_config_t SPI3{"wq:SPI3", CONFIG_WQ_SPI_STACKSIZE, (int8_t)CO
 static constexpr wq_config_t SPI4{"wq:SPI4", CONFIG_WQ_SPI_STACKSIZE, (int8_t)CONFIG_WQ_SPI4_PRIORITY};
 static constexpr wq_config_t SPI5{"wq:SPI5", CONFIG_WQ_SPI_STACKSIZE, (int8_t)CONFIG_WQ_SPI5_PRIORITY};
 static constexpr wq_config_t SPI6{"wq:SPI6", CONFIG_WQ_SPI_STACKSIZE, (int8_t)CONFIG_WQ_SPI6_PRIORITY};
+static constexpr wq_config_t SPI7{"wq:SPI7", CONFIG_WQ_SPI_STACKSIZE, (int8_t)CONFIG_WQ_SPI7_PRIORITY};
+static constexpr wq_config_t SPI8{"wq:SPI8", CONFIG_WQ_SPI_STACKSIZE, (int8_t)CONFIG_WQ_SPI8_PRIORITY};
 
 static constexpr wq_config_t I2C0{"wq:I2C0", CONFIG_WQ_I2C_STACKSIZE, (int8_t)CONFIG_WQ_I2C0_PRIORITY};
 static constexpr wq_config_t I2C1{"wq:I2C1", CONFIG_WQ_I2C_STACKSIZE, (int8_t)CONFIG_WQ_I2C1_PRIORITY};

@@ -20,19 +20,23 @@
 #include <debug.h>
 #include <errno.h>
 #include <syslog.h>
+#include <unistd.h>
 
 #include <nuttx/config.h>
 #include <nuttx/board.h>
+#include <nuttx/irq.h>
 #include <nuttx/clock.h>
 #include <nuttx/sdio.h>
 #include <nuttx/mmcsd.h>
 #include <nuttx/usb/usbdev.h>
 #include <nuttx/wqueue.h>
+#include <nuttx/kthread.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
 
 #include <arch/board/board.h>
 #include "arm_internal.h"
+#include "sam_sqi.h"
 
 #include <drivers/drv_hrt.h>
 #include <drivers/drv_board_led.h>
@@ -40,7 +44,7 @@
 #include <px4_platform_common/init.h>
 #include <px4_platform/gpio.h>
 
-#ifdef CONFIG_PIC32CZCA90_SDMMC1
+#ifdef CONFIG_PIC32CZCA90_SDMMC0
 #  include "sam_sdmmc.h"
 #endif
 
@@ -53,7 +57,7 @@
 #include "hardware/sam_mclk.h"
 #include "hardware/pic32czca90_memorymap.h"
 
-#ifdef CONFIG_PIC32CZCA90_SERCOM3_ISSPI
+#ifdef CONFIG_PIC32CZCA90_SERCOM8_ISSPI
 #  include "sam_spi.h"
 #endif
 
@@ -120,17 +124,23 @@ static void board_tcc1_early_init(void)
 	}
 }
 
-/* LED1 heartbeat — LPWORK job, toggles at 1 Hz.
- * If LED1 stops blinking the scheduler has stalled.
- */
-static struct work_s g_heartbeat_work;
 static bool g_led1_state;
 
-static void heartbeat_cb(FAR void *arg)
+#ifdef CONFIG_PIC32CZCA90_SQI1
+extern uint32_t g_sqi_swrst_timeouts;
+extern uint32_t g_sqi_clkstable_timeouts;
+#endif
+
+static int heartbeat_task(int argc, char *argv[])
 {
-	g_led1_state = !g_led1_state;
-	sam_portwrite(PORT_LED1, !g_led1_state);  /* PORT_LED1 active LOW */
-	work_queue(LPWORK, &g_heartbeat_work, heartbeat_cb, NULL, MSEC2TICK(500));
+	for (; ;) {
+		g_led1_state = !g_led1_state;
+		sam_portwrite(PORT_LED1, !g_led1_state);  /* PORT_LED1 active LOW */
+
+		usleep(500000);
+	}
+
+	return 0;
 }
 
 /************************************************************************************
@@ -219,18 +229,15 @@ __EXPORT int board_app_initialize(uintptr_t arg)
 	sam_eic_initialize();
 #endif
 
-	/* Turn on LED0 to show NuttX booted */
+	/* LED0 solid ON = NuttX booted; LED1 blinks at 1 Hz via heartbeat */
 	led_on(0);
 
-	/* Start LED1 heartbeat: toggles at 1 Hz to confirm scheduler is alive */
 	g_led1_state = false;
-	work_queue(LPWORK, &g_heartbeat_work, heartbeat_cb, NULL, MSEC2TICK(500));
+	kthread_create("heartbeat", SCHED_PRIORITY_DEFAULT - 20, 1024,
+		       heartbeat_task, NULL);
 
 #ifdef CONFIG_PIC32CZCA90_SQI1
 	{
-		/* SQI1 and SDMMC1 share the same physical pins (mux H=7 vs mux I=8).
-		 * Mux for SQI1 first, init flash + MTD partitions, then the SDMMC1
-		 * block below remuxes them to func I=8 via its own sam_portconfig calls. */
 		sam_portconfig(PORT_SQI1_CLK);
 		sam_portconfig(PORT_SQI1_CS0);
 		sam_portconfig(PORT_SQI1_IO0);
@@ -250,49 +257,40 @@ __EXPORT int board_app_initialize(uintptr_t arg)
 	}
 #endif /* CONFIG_PIC32CZCA90_SQI1 */
 
-#ifdef CONFIG_PIC32CZCA90_SDMMC1
+#ifdef CONFIG_PIC32CZCA90_SDMMC0
 	{
-		/* Configure SDMMC1 peripheral pins — mux I (function 8).
-		 * CLK is output-only; CMD and DAT0-3 are bidirectional (INEN set).
-		 * CD is a plain GPIO input with pullup (no PMUX).
-		 * These pins are shared with SQI1; sam_portconfig calls here remux
-		 * them from func H (SQI1=7) to func I (SDMMC1=8).
-		 */
-		sam_portconfig(PORT_SDMMC1_CLK);
-		sam_portconfig(PORT_SDMMC1_CMD);
-		sam_portconfig(PORT_SDMMC1_DAT0);
-#  ifdef CONFIG_PIC32CZCA90_SDMMC1_WIDTH_D1_D4
-		sam_portconfig(PORT_SDMMC1_DAT1);
-		sam_portconfig(PORT_SDMMC1_DAT2);
-		sam_portconfig(PORT_SDMMC1_DAT3);
+		sam_portconfig(PORT_SDMMC0_CLK);
+		sam_portconfig(PORT_SDMMC0_CMD);
+		sam_portconfig(PORT_SDMMC0_DAT0);
+#  ifdef CONFIG_PIC32CZCA90_SDMMC0_WIDTH_D1_D4
+		sam_portconfig(PORT_SDMMC0_DAT1);
+		sam_portconfig(PORT_SDMMC0_DAT2);
+		sam_portconfig(PORT_SDMMC0_DAT3);
+#  else
+		/* 1-bit mode: drive PC12 (DAT3) HIGH as GPIO to prevent card
+		 * entering SPI mode if DAT3 has an external pull-down (e.g. Waveshare CS). */
+		sam_portconfig(PORT_PORTC | PORT_PIN(12) |
+			       PORT_FLAG_OUTPUT | PORT_FLAG_OUTVAL_HIGH);
+		syslog(LOG_INFO, "[boot] DAT3 PC12 driven HIGH (1-bit mode)\n");
 #  endif
-		/* CD (PC28) is configured inside sam_sdmmc1_initialize(). */
+		sam_portconfig(PORT_SDMMC0_CD);
 
-		int ret = sam_sdmmc1_slotinitialize(0);
-		if (ret < 0)
-		{
-			syslog(LOG_ERR, "[boot] sam_sdmmc1_slotinitialize: %d\n", ret);
-		}
-		else
-		{
-#ifdef CONFIG_PIC32CZCA90_SQI1
-			board_qspi_set_sdmmc_active(true);
-			syslog(LOG_INFO, "[boot] SDMMC1 ready, pin-mux arbitration active\n");
-#else
-			syslog(LOG_INFO, "[boot] SDMMC1 ready (SQI1 disabled, no pin conflict)\n");
-#endif
-		}
-		/* Mount is handled by rcS: mount -t vfat /dev/mmcsd0 /fs/microsd */
-	}
-#endif /* CONFIG_PIC32CZCA90_SDMMC1 */
-
-#ifdef CONFIG_PIC32CZCA90_SERCOM3_ISSPI
-	{
-		FAR struct spi_dev_s *spi3 = sam_spibus_initialize(3);
-		if (!spi3) {
-			syslog(LOG_ERR, "[boot] SPI3 init failed\n");
+		int ret = sam_sdmmc0_slotinitialize(0);
+		if (ret < 0) {
+			syslog(LOG_ERR, "[boot] sam_sdmmc0_slotinitialize: %d\n", ret);
 		} else {
-			syslog(LOG_INFO, "[boot] SPI3 (SERCOM3) ready\n");
+			syslog(LOG_INFO, "[boot] SDMMC0 ready\n");
+		}
+	}
+#endif /* CONFIG_PIC32CZCA90_SDMMC0 */
+
+#ifdef CONFIG_PIC32CZCA90_SERCOM8_ISSPI
+	{
+		FAR struct spi_dev_s *spi8 = sam_spibus_initialize(8);
+		if (!spi8) {
+			syslog(LOG_ERR, "[boot] SPI8 init failed\n");
+		} else {
+			syslog(LOG_INFO, "[boot] SPI8 (SERCOM8) ready\n");
 		}
 	}
 #endif

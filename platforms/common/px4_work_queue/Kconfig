@@ -25,7 +25,7 @@ config WQ_SPI_STACKSIZE
 	default 2392
 	range 1000 10000
 	help
-	  Sets the stack size for all SPI work queues (SPI0-SPI6).
+	  Sets the stack size for all SPI work queues (SPI0-SPI8).
 
 config WQ_SPI0_PRIORITY
 	int "Relative priority for wq:SPI0"
@@ -75,6 +75,20 @@ config WQ_SPI6_PRIORITY
 	range -255 0
 	help
 	  Sets the relative priority for the SPI6 work queue.
+
+config WQ_SPI7_PRIORITY
+	int "Relative priority for wq:SPI7"
+	default -8
+	range -255 0
+	help
+	  Sets the relative priority for the SPI7 work queue.
+
+config WQ_SPI8_PRIORITY
+	int "Relative priority for wq:SPI8"
+	default -9
+	range -255 0
+	help
+	  Sets the relative priority for the SPI8 work queue.
 
 endmenu # SPI Bus Work Queues
 

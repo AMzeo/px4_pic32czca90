@@ -2,17 +2,16 @@
 #
 # PIC32CZ CA90 Curiosity Ultra - sensor drivers
 #
-# SPI bus 3: ICM-45686 (primary IMU)
+# SPI bus 8: ICM-45686 (primary IMU) on SERCOM8 (PD24-27, J401)
 # I2C bus 5: 13DOF Click (MIKROE-2817) — BMI088 + BMM150 + BME680
 #   BMI088 accel 0x18, gyro 0x68, BMM150 mag 0x10, BME680 0x76 (no driver)
 #
 
-# Primary IMU — 6DOF IMU 27 Click (MIKROE-6514) on SPI bus 3
-icm45686 -s -b 3 start
+# Primary IMU — 6DOF IMU 27 Click (ICM-45686, MIKROE-6514) on SPI bus 8
+icm45686 -s -b 8 start
 
-# Magnetometer — 13DOF Click BMM150 on I2C bus 5 (MUST start before BMI088)
+# Magnetometer — Geomagnetic Click (BMM150) on I2C bus 5
 bmm150 -X -b 5 start
 
-# Secondary IMU — 13DOF Click BMI088 on I2C bus 5
-bmi088_i2c -A -X -b 5 start
-bmi088_i2c -G -X -b 5 -a 0x68 start
+# Barometer — Pressure 5 Click (BMP388) on I2C bus 5, addr 0x76 (SDO=GND)
+bmp388 -X -b 5 -a 0x76 -f 400000 start
