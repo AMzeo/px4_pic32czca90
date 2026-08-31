@@ -1,11 +1,9 @@
 CONFIG_BOARD_TOOLCHAIN="arm-none-eabi"
 CONFIG_BOARD_ARCHITECTURE="cortex-m7"
-CONFIG_BOARD_CONSTRAINED_FLASH=y
-CONFIG_BOARD_EXTERNAL_METADATA=y
+# CONFIG_BOARD_CONSTRAINED_FLASH is not set
+# CONFIG_BOARD_EXTERNAL_METADATA is not set
 CONFIG_BOARD_SERIAL_GPS1="/dev/ttyS1"
 CONFIG_BOARD_SERIAL_RC="/dev/ttyS2"
-# TEL1/TEL2 not available on Curiosity EXT headers — USB MAVLink (J102) used instead
-# Production board: add TEL1=/dev/ttyS3, TEL2=/dev/ttyS2, RC=/dev/ttyS4 (SERCOM7)
 CONFIG_BOARD_PARAM_FILE="/fs/mtd_params"
 
 # USB CDC/ACM

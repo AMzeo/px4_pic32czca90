@@ -26,6 +26,8 @@ struct ep0_trace_entry
 #define EP0_TRACE_SIZE 32
 extern struct ep0_trace_entry *sam_usb_ep0_trace(void);
 extern uint8_t sam_usb_ep0_trace_idx(void);
+extern void sam_usb_ep3_sizes(volatile uint8_t **sizes, volatile uint8_t **stx,
+                              volatile uint8_t **idx);
 
 #define USBHS0_BASE       0x4f010000u
 
@@ -131,6 +133,33 @@ int usb_diag_main(int argc, char *argv[])
       return 0;
     }
 
+  /* If argument "ep3sizes" is passed, show last 16 EP3 packet sizes */
+  if (argc > 1 && strcmp(argv[1], "ep3sizes") == 0)
+    {
+      volatile uint8_t *sizes;
+      volatile uint8_t *stx;
+      volatile uint8_t *widx;
+      sam_usb_ep3_sizes(&sizes, &stx, &widx);
+      uint8_t idx = *widx;
+      uint8_t count = idx < 16 ? idx : 16;
+      uint8_t start = idx < 16 ? 0 : idx & 0x0f;
+
+      printf("=== Last %d EP3 packets (newest last) ===\n", count);
+      printf("  #   size  stx   valid?\n");
+      for (int i = 0; i < count; i++)
+        {
+          uint8_t ri = (start + i) & 0x0f;
+          uint8_t s  = sizes[ri];
+          uint8_t b  = stx[ri];
+          printf("  [%2d] %3d   0x%02x  %s\n",
+                 i, (int)s, (int)b,
+                 (b == 0xfd) ? "MAVLink2" :
+                 (b == 0xfe) ? "MAVLink1" : "INVALID");
+        }
+      printf("(35+0xfd = PARAM_SET MAVLink2; 21+0xfd = heartbeat)\n");
+      return 0;
+    }
+
   /* If argument "ep" is passed, dump EP1-3 FIFO config */
   if (argc > 1 && strcmp(argv[1], "ep") == 0)
     {
@@ -218,8 +247,10 @@ int usb_diag_main(int argc, char *argv[])
          (unsigned long)dbg[4], (unsigned long)dbg[5]);
   printf("  epn_rx=%lu rx_noreq=%lu rx_bytes=%lu epn_tx=%lu tx_done=%lu\n",
          (unsigned long)dbg[6], (unsigned long)dbg[7],
-         (unsigned long)dbg[8], (unsigned long)dbg[9],
-         (unsigned long)dbg[10]);
+         (unsigned long)dbg[8], (unsigned long)dbg[20],
+         (unsigned long)dbg[21]);
+  printf("  ep3_rx=%lu ep3_bytes=%lu\n",
+         (unsigned long)dbg[9], (unsigned long)dbg[10]);
 
   printf("\n--- Interpretation ---\n");
   uint32_t status = REG32(0x0018);

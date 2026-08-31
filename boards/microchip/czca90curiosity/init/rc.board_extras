@@ -6,3 +6,11 @@
 # sensor drivers are ported.
 
 echo "INFO: rc.board_extras - no extras for CA90 bringup"
+
+# boot_complete must be set before QGC connects. cdcacm_autostart starts mavlink
+# asynchronously after rcS exits, so the 20-second fallback is the only thing
+# that sets it — QGC connects before 20 s and all PARAM_SET are dropped.
+# rc.board_extras runs during rcS. Setting boot_complete here (before mavlink
+# starts) means _boot_complete=true is already in place when cdcacm_autostart
+# spawns mavlink. Same pattern as CA70 rc.board_extras.
+mavlink boot_complete

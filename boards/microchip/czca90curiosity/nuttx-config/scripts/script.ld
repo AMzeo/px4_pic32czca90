@@ -36,7 +36,7 @@
  *   - 128 KB Boot Flash Memory (BFM) at 0x08000000 — vector table lives here
  *   - 8 MB Program Flash Memory (PFM) at 0x0C000000 — code and rodata
  *   - 128 KB DTCM at 0x20000000 (tightly coupled, kept disabled)
- *   - 896 KB SRAM at 0x20020000
+ *   - 1024 KB FLEXRAM at 0x20020000 (DFP ATDF: size=0x100000, XC32 LD: RAM_LENGTH=0x100000)
  *
  * Boot sequence (verified from Harmony PIC32CZ8110CA80208.ld):
  *   BootROM (0x04000000) reads SP from [0x08000000] (BFM[0])
@@ -44,9 +44,9 @@
  *   VTOR is set to 0x08000000 (BFM start) by BootROM, then re-affirmed in __start.
  *   VECTOR_REGION = boot_rom (matches Harmony default when boot_rom region present).
  *
- * Memory layout (896 KB SRAM):
- *   sram    : 832 KB at 0x20020000 - 0x200EFFFF (heap + stack)
- *   nocache : 64 KB  at 0x200F0000 - 0x200FFFFF (DMA buffers, uncached)
+ * Memory layout (1024 KB FLEXRAM = 960 KB general + 64 KB nocache):
+ *   sram    : 960 KB at 0x20020000 - 0x2010FFFF (heap + stack)
+ *   nocache : 64 KB  at 0x20110000 - 0x2011FFFF (DMA buffers, uncached)
  *
  * CA80 vs CA90: identical memory map; CA90 adds HSM (Hardware Security Module).
  */
@@ -55,8 +55,8 @@ MEMORY
 {
   boot_rom (rx) : ORIGIN = 0x08000000, LENGTH = 128K  /* BFM — vector table */
   flash (rx)    : ORIGIN = 0x0C000000, LENGTH = 8M    /* PFM — code          */
-  sram (rwx)    : ORIGIN = 0x20020000, LENGTH = 832K
-  nocache (rwx) : ORIGIN = 0x200F0000, LENGTH = 64K
+  sram (rwx)    : ORIGIN = 0x20020000, LENGTH = 960K
+  nocache (rwx) : ORIGIN = 0x20110000, LENGTH = 64K
 }
 
 OUTPUT_ARCH(arm)
