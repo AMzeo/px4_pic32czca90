@@ -7,6 +7,11 @@
 
 echo "INFO: rc.board_extras - no extras for CA90 bringup"
 
+# rcS line 518 `if [ "$RC_INPUT_ARGS" != "" ]` fails in NuttX NSH when
+# RC_INPUT_ARGS contains a space ("-d /dev/ttyS2") — test sees multiple tokens.
+# Start rc_input here instead, after rc.serial has already run.
+rc_input start -d /dev/ttyS2
+
 # boot_complete must be set before QGC connects. cdcacm_autostart starts mavlink
 # asynchronously after rcS exits, so the 20-second fallback is the only thing
 # that sets it — QGC connects before 20 s and all PARAM_SET are dropped.

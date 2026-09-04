@@ -267,11 +267,15 @@ __EXPORT int board_app_initialize(uintptr_t arg)
 		sam_portconfig(PORT_SDMMC0_DAT2);
 		sam_portconfig(PORT_SDMMC0_DAT3);
 #  else
-		/* 1-bit mode: drive PC12 (DAT3) HIGH as GPIO to prevent card
-		 * entering SPI mode if DAT3 has an external pull-down (e.g. Waveshare CS). */
+		/* 1-bit mode: drive PC12 (SDMMC0_DAT3 = SD CS/DAT3) HIGH as GPIO
+		 * to prevent card entering SPI mode if DAT3 has an external
+		 * pull-down (e.g. Waveshare adapter CS pin).
+		 * DFP: PC12=SDMMC0_SDDAT3 (mux I), PC13=SDMMC0_SDCMD (mux I).
+		 * CMD (PC13) is already muxed to SDMMC0; only DAT3 needs
+		 * explicit GPIO-HIGH here since it's unused in 1-bit mode. */
 		sam_portconfig(PORT_PORTC | PORT_PIN(12) |
 			       PORT_FLAG_OUTPUT | PORT_FLAG_OUTVAL_HIGH);
-		syslog(LOG_INFO, "[boot] DAT3 PC12 driven HIGH (1-bit mode)\n");
+		syslog(LOG_INFO, "[boot] DAT3/CS PC12 driven HIGH (1-bit mode)\n");
 #  endif
 		sam_portconfig(PORT_SDMMC0_CD);
 

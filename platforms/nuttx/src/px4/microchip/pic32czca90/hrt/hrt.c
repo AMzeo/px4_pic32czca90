@@ -49,6 +49,11 @@
 #include "hardware/sam_gclk.h"
 #include "hardware/sam_tcc.h"
 
+#ifdef HRT_PPM_CHANNEL
+#  include <systemlib/ppm_decode.h>
+#  include <px4_arch/micro_hal.h>
+#endif
+
 /* =========================================================================
  * Latency histogram (required by PX4 platform)
  * =========================================================================
@@ -202,6 +207,92 @@ static int hrt_tcc_isr(int irq, FAR void *context, FAR void *arg)
 }
 
 /* =========================================================================
+ * PPM RC input decoder (GPIO edge-interrupt path)
+ * =========================================================================
+ * Activated when board_config.h defines HRT_PPM_CHANNEL.
+ * PC24 → EIC EXTINT8 → hrt_ppm_isr() alternates between rising/falling
+ * edges, timestamps each transition with hrt_absolute_time(), and feeds
+ * the PPM state machine.  Decoded channel values land in the ppm_buffer[]
+ * globals consumed by RCInput.cpp (the RC_SCAN_PPM case).
+ */
+
+#ifdef HRT_PPM_CHANNEL
+
+/* PPM globals — declared extern in <systemlib/ppm_decode.h> */
+__EXPORT uint16_t    ppm_buffer[PPM_MAX_CHANNELS];
+__EXPORT uint16_t    ppm_frame_length;
+__EXPORT unsigned    ppm_decoded_channels;
+__EXPORT hrt_abstime ppm_last_valid_decode;
+
+/* Decode thresholds (µs) */
+#define PPM_SYNC_US   3000u   /* gap ≥ 3 ms = sync → new frame */
+#define PPM_MIN_US     800u   /* shortest valid channel pulse   */
+#define PPM_MAX_US    2200u   /* longest valid channel pulse    */
+
+/* Decoder private state */
+static uint16_t g_ppm_last_us;                  /* 16-bit µs of previous edge    */
+static uint16_t g_ppm_frame_start_us;           /* 16-bit µs when sync was seen  */
+static uint16_t g_ppm_temp[PPM_MAX_CHANNELS];   /* channels accumulating in frame */
+static unsigned g_ppm_channel;                  /* next slot to fill              */
+static bool     g_ppm_last_edge;                /* true = last ISR was rising     */
+
+static void hrt_ppm_decode(uint16_t now_us)
+{
+  uint16_t interval = now_us - g_ppm_last_us;   /* 16-bit wrap-around is correct */
+  g_ppm_last_us = now_us;
+
+  if (interval >= PPM_SYNC_US)
+    {
+      /* Sync gap — publish completed frame if it had ≥ 4 channels */
+      if (g_ppm_channel >= 4)
+        {
+          for (unsigned i = 0; i < g_ppm_channel; i++)
+            {
+              ppm_buffer[i] = g_ppm_temp[i];
+            }
+
+          ppm_decoded_channels = g_ppm_channel;
+          ppm_frame_length     = (uint16_t)(now_us - g_ppm_frame_start_us);
+          ppm_last_valid_decode = hrt_absolute_time();
+        }
+
+      g_ppm_channel       = 0;
+      g_ppm_frame_start_us = now_us;
+    }
+  else if (interval >= PPM_MIN_US && interval <= PPM_MAX_US)
+    {
+      /* Valid channel pulse — accumulate */
+      if (g_ppm_channel < PPM_MAX_CHANNELS)
+        {
+          g_ppm_temp[g_ppm_channel++] = interval;
+        }
+    }
+  else
+    {
+      /* Glitch / noise — discard partial frame */
+      g_ppm_channel = 0;
+    }
+}
+
+static int hrt_ppm_isr(int irq, FAR void *context, FAR void *arg)
+{
+  /* 16-bit µs timestamp — wraps every 65.5 ms, deltas correct across wrap */
+  uint16_t now_us = (uint16_t)(hrt_absolute_time() & 0xffffU);
+
+  /* Flip to opposite edge so next transition fires this ISR again */
+  px4_arch_gpiosetevent(GPIO_PPM_IN,
+                        g_ppm_last_edge ? false : true,
+                        g_ppm_last_edge ? true  : false,
+                        true, hrt_ppm_isr, NULL);
+  g_ppm_last_edge = !g_ppm_last_edge;
+
+  hrt_ppm_decode(now_us);
+  return OK;
+}
+
+#endif /* HRT_PPM_CHANNEL */
+
+/* =========================================================================
  * Public API
  * =========================================================================
  */
@@ -294,6 +385,13 @@ void hrt_init(void)
   /* 7. Attach ISR for TCC0 MC0 compare match and enable in NVIC */
   irq_attach(SAM_IRQ_TCC0MC0, hrt_tcc_isr, NULL);
   up_enable_irq(SAM_IRQ_TCC0MC0);
+
+#ifdef HRT_PPM_CHANNEL
+  /* 8. Arm PPM input — EIC edge interrupt on GPIO_PPM_IN (PC24, EXTINT8).
+   * Start listening for rising edges; ISR will flip to falling after first hit. */
+  g_ppm_last_edge = false;
+  px4_arch_gpiosetevent(GPIO_PPM_IN, true, false, true, hrt_ppm_isr, NULL);
+#endif
 }
 
 /**

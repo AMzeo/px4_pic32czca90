@@ -88,9 +88,18 @@
 
 #define PX4_SPIDEV_ICM_42688P       PX4_MK_SPI_SEL(PX4_SPI_BUS_SENSORS, 0)
 
-/* IMU data-ready interrupt: PA08 → EXTINT[8], function A (EIC) */
+/* IMU data-ready: PA08, plain GPIO input (ICM45686 uses FIFO polling — no EIC needed).
+ * Not muxed to EIC so EXTINT8 remains free for PPM input on PC24. */
 #define GPIO_IMU_DRDY \
-    (PORT_PORTA | PORT_FUNC(0) | PORT_PIN(8) | PORT_FLAG_PMUXEN | PORT_FLAG_INEN)
+    (PORT_PORTA | PORT_PIN(8) | PORT_FLAG_INEN)
+
+/* PPM RC input: PC24 → EXTINT[8], function A (EIC).
+ * Wire R81 V2 PPM-sum output to EXT2 PC24 pad.
+ * Decoded by hrt_ppm_isr() in hrt.c via px4_arch_gpiosetevent().
+ * HRT_PPM_CHANNEL activates the PPM decode path in RCInput.cpp. */
+#define HRT_PPM_CHANNEL   1
+#define GPIO_PPM_IN \
+    (PORT_PORTC | PORT_FUNC(0) | PORT_PIN(24) | PORT_FLAG_PMUXEN | PORT_FLAG_INEN)
 
 /* PWM outputs: TCC1 WO0-WO3 (PB10-PB13) on EXT1 header */
 #define DIRECT_PWM_OUTPUT_CHANNELS  4
