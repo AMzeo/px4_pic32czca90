@@ -815,15 +815,16 @@ Three files that NuttX core includes everywhere — critical to get right:
 | `hardware/sam_mcan.h`      | `component/can.h`           | CAN-FD driver (P11) |
 | `hardware/sam_wdt.h`       | `component/wdt.h`           | Watchdog (P12)      |
 
-**rc.board_defaults temporary state — MUST RESTORE before production**
+**rc.board_defaults — production state (restored 2026-09-08)**
 
-Currently `rc.board_defaults` has a temporary RC test configuration:
-```
-param set MAV_0_CONFIG 0        ← WRONG: disables serial telemetry
-param set RC_PORT_CONFIG 101    ← WRONG: RC on SERCOM4 (telemetry port)
-```
-Restore to production values:
-```
-param set MAV_0_CONFIG 101      ← telemetry on SERCOM4/ttyS2 (SiK radio)
-param set RC_PORT_CONFIG 300    ← RC on SERCOM7/ttyS3 (SBUS, hardware RXINV)
-```
+MAV_0_CONFIG=0, RC_PORT_CONFIG=101 — Curiosity board config:
+- SERCOM7 (PD14/PD15) NOT exposed on Curiosity; RC SBUS uses SERCOM4 (PC21/PC22, EXT2 13/14).
+- board.h BOARD_SERCOM4_MUXCONFIG has USART_CTRLA_RXINV; defconfig USART4=100000/8E2.
+- MAV_0_CONFIG=0: no serial radio needed — USB HS (J102) provides full GCS link at 480 Mbps.
+- GPS on SERCOM0 (PC00/PC01) confirmed accessible on Curiosity EXT header.
+Full flight-ready param set: EKF2 (GPS ctrl=7), PWM limits, RC mapping, PID tuning,
+MPC position control, failsafe, dataman start. GPS enabled (EKF2_GPS_CTRL=7).
+
+**Production PCB differences** (when moving off Curiosity):
+- MAV_0_CONFIG=101 (SERCOM4/ttyS2 = SiK telemetry radio, restore RXINV=0 + 57600 baud in board.h)
+- RC_PORT_CONFIG=300 (SERCOM7/ttyS3 = SBUS, RXINV in SERCOM7 muxconfig)
