@@ -803,8 +803,69 @@ Three files that NuttX core includes everywhere — critical to get right:
 - `hardware/sam_mcan.h` from DFP `component/can.h`; `sam_mcan.c`
 - CAN3 (J701) `GCLK_CH=48`, CAN4 (J702) `GCLK_CH=49`; ATA6561 transceivers on-board
 
-#### P12 — Safety / Misc
-- `hardware/sam_wdt.h` from DFP `component/wdt.h`; `sam_wdt.c` — 4 s timeout, EWINT at 2 s
+#### P12 — Watchdog (WDT) — NEXT TO IMPLEMENT
+
+**DFP-verified register facts (do not re-derive):**
+- Base: `0x44070000`
+- MCLK_ID_APB: `14` → `SAM_MCLK_CLKMSK_ADDR(14)` / `SAM_MCLK_CLKMSK_BIT(14)` (same pattern as EIC/TCC)
+- No GCLK needed — WDT uses OSCULP32K always-on directly (GCLK3 feeds optional debounce only)
+- IRQ: `SAM_IRQ_WDT = SAM_IRQ_EXTINT + 14` (already in pic32czca90_irq.h ✓)
+- Clock: OSCULP32K (~32 kHz) / 32 internal prescaler = **1024 Hz** counter
+- Timeout: `WDT_CONFIG.PER = CYC4096 (0x9)` = 4096/1024 = **4 seconds**
+- Early warning: `WDT_EWCTRL.EWOFFSET = CYC2048 (0x8)` → EW fires at 4s−2s = **2 seconds**
+- Clear key: write `0xA5` to `WDT_CLEAR` (offset 0x0C); poll `WDT_SYNCBUSY.CLEAR` after
+- SYNCBUSY must be polled after writing CTRLA.ENABLE and CTRLA.ALWAYSON
+- Reset value of CONFIG is 0xBB (PER=0xB=CYC16384, WINDOW=0xB) — must overwrite PER before enabling
+
+**Files to create (NuttX submodule):**
+
+1. `platforms/nuttx/NuttX/nuttx/arch/arm/src/pic32czca90/hardware/sam_wdt.h`
+   - Copy DFP bit definitions from `C:/Users/I74182/.mchp_packs/Microchip/PIC32CZ-CA90_DFP/1.7.168/CA90/include/component/wdt.h`
+   - Add: `#define SAM_WDT_BASE  0x44070000UL`
+   - Add: `#define MCLK_ID_APB_WDT  14u`
+   - Add offset macros: `SAM_WDT_CTRLA`, `SAM_WDT_CONFIG`, `SAM_WDT_EWCTRL`, `SAM_WDT_INTENCLR`, `SAM_WDT_INTENSET`, `SAM_WDT_INTFLAG`, `SAM_WDT_SYNCBUSY`, `SAM_WDT_CLEAR`
+
+2. `platforms/nuttx/NuttX/nuttx/arch/arm/src/pic32czca90/sam_wdt.c`
+   - Reference: `platforms/nuttx/NuttX/nuttx/arch/arm/src/samv7/sam_wdt.c` (structure only — registers completely different)
+   - `sam_wdt_initialize()`:
+     1. Enable APB clock: `SAM_MCLK_CLKMSK_ADDR(14)` |= `SAM_MCLK_CLKMSK_BIT(14)`
+     2. Write CONFIG: PER=CYC4096, WINDOW=0 (normal mode)
+     3. Write EWCTRL: EWOFFSET=CYC2048
+     4. Write CTRLA: ENABLE=1; poll SYNCBUSY.ENABLE
+     5. Attach EW ISR to `SAM_IRQ_WDT`; enable INTENSET.EW
+   - `sam_wdt_pet()` (called from work queue every ~1 s):
+     1. Write `0xA5` to WDT_CLEAR; poll `SYNCBUSY.CLEAR`
+   - EW ISR: print `_alert("WDT: early warning\n")` — signals system may be stuck
+
+3. `platforms/nuttx/NuttX/nuttx/arch/arm/src/pic32czca90/sam_wdt.h` — public header for `sam_wdt_initialize()`, `sam_wdt_pet()`
+
+**Files to modify:**
+
+4. `platforms/nuttx/NuttX/nuttx/arch/arm/src/pic32czca90/Make.defs`
+   - Add `sam_wdt.c` under `CONFIG_PIC32CZCA90_WDT`
+
+5. `platforms/nuttx/NuttX/nuttx/arch/arm/src/pic32czca90/Kconfig`
+   - Add `config PIC32CZCA90_WDT` boolean
+
+6. `boards/microchip/czca90curiosity/nuttx-config/nsh/defconfig`
+   - Add `CONFIG_PIC32CZCA90_WDT=y`
+   - Add `CONFIG_WATCHDOG=y` (NuttX watchdog subsystem)
+
+7. `boards/microchip/czca90curiosity/default.px4board`
+   - Add `CONFIG_DRIVERS_WATCHDOG=y`
+
+8. `boards/microchip/czca90curiosity/src/init.c`
+   - Call `sam_wdt_initialize()` in `board_app_initialize()`
+   - Schedule `sam_wdt_pet()` via `work_queue(LPWORK, ...)` every 1000 ms
+
+**Test procedure:**
+1. Flash; verify LED1 still blinks (WDT being kicked) — boot success
+2. NSH: `hrt_test` or any command — system still responsive = WDT not firing prematurely
+3. Deliberate stall test: add a temporary `up_udelay(5000000)` (5s) in init.c after WDT enable → should reboot in ~4s with `_alert("WDT: early warning")` printed at 2s mark
+4. Remove stall; rebuild; verify normal operation
+
+**Do NOT use ALWAYSON** — with ALWAYSON set, the WDT cannot be disabled by debugger and locks out MPLAB programming. Use ENABLE only.
+
 - ~~DSU: un-stub `board_mcu_version()` / `board_get_uuid32()`~~ — **DONE ✓** (DID at 0x44000120, UID at 0x0A0071E0)
 
 **Missing register headers** (drivers blocked until these exist):
@@ -813,7 +874,7 @@ Three files that NuttX core includes everywhere — critical to get right:
 |----------------------------|-----------------------------|---------------------|
 | `hardware/sam_adc.h`       | `component/adc.h`           | ADC driver (P10)    |
 | `hardware/sam_mcan.h`      | `component/can.h`           | CAN-FD driver (P11) |
-| `hardware/sam_wdt.h`       | `component/wdt.h`           | Watchdog (P12)      |
+| `hardware/sam_wdt.h`       | `component/wdt.h`           | Watchdog (P12) — see above |
 
 **rc.board_defaults — production state (restored 2026-09-08)**
 
