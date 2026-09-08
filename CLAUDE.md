@@ -2,6 +2,175 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+---
+
+## SESSION PROTOCOL — READ THIS FIRST, EVERY SESSION
+
+This section exists because one session wasted 8+ hours chasing problems introduced by
+our own changes while trying to fix the original issue (QGC param writes). These rules
+prevent that from ever happening again.
+
+### Step 1 — Repo health check (do this before anything else)
+
+```bash
+# Parent repo — must print nothing (clean working tree)
+git diff HEAD --name-only
+
+# NuttX submodule — must print nothing
+cd platforms/nuttx/NuttX/nuttx && git status --short && cd -
+
+# If either is dirty: stop and understand WHY before touching anything.
+# Do NOT assume previous session left things in a good state.
+```
+
+### Step 2 — Board health check (do this before any test)
+
+From NSH console (J200, /dev/ttyACM0, 115200):
+```
+# Check LED1 is blinking (= scheduler alive)
+# Check SQI params are not stale from previous session
+param show SYS_USB_AUTO    # must be 2 for USB to work
+param show GPS_1_CONFIG    # must be 201 (SERCOM0/ttyS1)
+param show GPS_2_CONFIG    # must be 0
+```
+
+If USB doesn't enumerate after flashing new firmware — **do this first, before any code investigation:**
+```
+param reset_all
+param save
+reboot
+```
+
+`param reset_all` is the nuclear option: clears every saved param from SQI. After reboot,
+`rc.board_defaults` re-applies all board-specific values from scratch. Use this whenever
+USB or any subsystem stops working after a firmware change — it has fixed the issue every time.
+
+**Critical:** SQI flash is NOT erased when firmware is reflashed via PKOB4.
+Stale saved params silently override compiled-in defaults after every firmware update.
+The most common symptom: USB doesn't enumerate despite sercon succeeding. Root cause:
+SYS_USB_AUTO (or another param) stored as wrong value in SQI from a previous session.
+Always `param reset_all; param save; reboot` before suspecting hardware or code.
+
+### Step 3 — Before making any change to any file
+
+State all three of these before touching a file:
+
+1. **Hypothesis:** What specific behavior is wrong and why do I believe this file causes it?
+2. **Change:** Exactly one file, exactly one change. Never multiple files at once.
+3. **Test:** How will I confirm the change helped or didn't help? What is the expected output?
+
+If you cannot state all three clearly → do not make the change yet. Investigate further first.
+
+### Step 4 — After making a change
+
+```bash
+# Confirm only the intended file changed
+git diff HEAD --name-only
+```
+
+If extra files appear → understand why before building.
+
+### Step 5 — Before flashing any firmware
+
+```bash
+# 1. Verify repo is in the expected state
+git diff HEAD --name-only
+
+# 2. Verify NuttX submodule is clean
+cd platforms/nuttx/NuttX/nuttx && git status --short && cd -
+
+# 3. Check for debug prints left in shared files
+grep -n "PX4_INFO\|syslog\|printf" src/modules/mavlink/mavlink_parameters.cpp | grep -i "debug\|param_set\|param_req"
+# If any are found → decide: ship them or revert them first
+
+# 4. Generate hex
+arm-none-eabi-objcopy -O ihex \
+  build/microchip_czca90curiosity_default/microchip_czca90curiosity_default.elf \
+  build/microchip_czca90curiosity_default/microchip_czca90curiosity_default.hex
+```
+
+### Step 6 — After reflashing
+
+From NSH (within 10 seconds of boot):
+```
+# Verify heartbeat: LED1 must blink
+# Then:
+param show SYS_USB_AUTO    # confirm = 2
+mavlink status             # after ~5s, confirm mavlink started
+```
+
+---
+
+## INVESTIGATION DISCIPLINE — Never violate these
+
+### Rule: One change per test cycle
+
+Change one thing → build → flash → test → document result → then decide next change.
+Never queue up "I'll change A, B, and C and see if it helps." If it helps you don't know
+which one fixed it. If it breaks you don't know which one broke it.
+
+### Rule: Revert before pivoting
+
+If a change did not help → `git checkout HEAD -- <file>` before trying something else.
+Never leave a "harmless" change in place while testing a different hypothesis. There is no
+such thing as a harmless untested change.
+
+### Rule: Never modify these files speculatively
+
+These files are known-working on hardware. Modifying them without DFP register evidence
+or a confirmed hardware bug report is prohibited:
+
+| File | Reason |
+|---|---|
+| `platforms/nuttx/NuttX/nuttx/arch/arm/src/pic32czca90/sam_usb.c` | USB HS driver — hardware-verified working at 480 Mbps |
+| `platforms/nuttx/NuttX/nuttx/arch/arm/src/pic32czca90/sam_i2c_master.c` | I2C driver — 1.6M+ DMA completions verified |
+| `platforms/nuttx/NuttX/nuttx/arch/arm/src/pic32czca90/sam_spi.c` | SPI driver — 307k+ ICM45686 transfers verified |
+| `boards/microchip/czca90curiosity/src/qspi.c` | SQI param storage — persistence verified |
+| `boards/microchip/czca90curiosity/src/sam_sqi.c` | SQI BD-DMA engine — verified |
+
+Any modification to these files requires a git commit message explaining the confirmed bug
+and DFP/hardware evidence. No speculative changes.
+
+### Rule: Shared PX4/NuttX files get separate PRs
+
+Files not under `boards/microchip/czca90curiosity/` or `platforms/nuttx/NuttX/nuttx/arch/arm/src/pic32czca90/`
+are shared with other boards. Adding debug prints is OK for a session but MUST be reverted
+before committing. Never commit shared file changes in the CA90 branch.
+
+### Rule: Defconfig changes must be intentional
+
+`boards/microchip/czca90curiosity/nuttx-config/nsh/defconfig` — every `=y`/`=n` change
+must have a stated reason. Never "try" a Kconfig option speculatively. The known-good
+values are in the **Protected defconfig values** table below.
+
+### Rule: When USB stops working — check SQI params first
+
+Before doing anything else: `param show SYS_USB_AUTO`. If not 2, that is the cause.
+Do not chase USB hardware/driver issues until params are confirmed correct.
+
+---
+
+## PROTECTED DEFCONFIG VALUES — never change without proof
+
+```
+CONFIG_CDCACM_IFLOWCONTROL is not set   # DO NOT enable — breaks QGC connection
+CONFIG_CDCACM_RXBUFSIZE=600             # increasing to 4096 not tested; do not change
+CONFIG_CDCACM_TXBUFSIZE=12000           # known good; do not change
+CONFIG_SERIAL_REMOVABLE=y               # forced by Kconfig select — cannot be removed
+CONFIG_PIC32CZCA90_SDMMC0_WIDTH_D1_D4  # is NOT set — hardware constraint (1-bit SDMMC0)
+```
+
+---
+
+## FIXED — QGC param writes (QGC→PX4) — FIXED 2026-08-30
+
+Root cause: `sam_fifo_read()` in `sam_usb.c` used repeated `*fifo8` pointer reads
+(always lane 0) instead of `(i & 3U)` byte-lane rotation. Every 4th byte was CRC byte
+read as data → PARAM_SET payload corrupted → `param_find()` returned PARAM_INVALID.
+Fix: Harmony `(i & 3U)` pattern in all FIFO reads. See Key Bug History table.
+
+---
+
 ## NSH Command Registration — Rules (read before adding any new command)
 
 There are exactly **two mechanisms** for making a command available in NSH. Confusing them is the most common "command not found" mistake in this repo.
@@ -200,8 +369,8 @@ OSCULP32K → GCLK3 (SRC=3, DIV=1) → 32.768 kHz → SERCOM slow clock
 | GCLK1 | PLL0 | /2 (DIVSEL=1) | 150 MHz | SERCOM1 (console), TCC0 (HRT) — **reserved, do not add** |
 | GCLK2 | PLL0 | 3 | 100 MHz | SQI1 (`GCLK_PCHCTRL[57] = GEN(2)\|CHEN`) |
 | GCLK3 | OSCULP32K | 1 | 32.768 kHz | SERCOM slow, WDT, EIC |
-| GCLK4 | PLL0 | 3 | 100 MHz | SDMMC1 main (`GCLK_PCHCTRL[60] = GEN(4)\|CHEN`) |
-| GCLK5 | PLL0 | 25 | 12 MHz | SDMMC1 slow (`GCLK_PCHCTRL[61] = GEN(5)\|CHEN`) |
+| GCLK4 | PLL0 | 3 | 100 MHz | SDMMC0 main (`GCLK_PCHCTRL[58] = GEN(4)\|CHEN`) |
+| GCLK5 | PLL0 | 25 | 12 MHz | SDMMC0 slow (`GCLK_PCHCTRL[59] = GEN(5)\|CHEN`) |
 
 GCLK2/GCLK4/GCLK5 are not yet configured in board.h — must be enabled at Stage 1.
 
@@ -316,6 +485,7 @@ When any clock frequency, GCLK source, SERCOM pin, or baud rate changes — upda
 | USB HS: HSENABLE not set in POWER | `sam_usb.c` | Device enumerates at Full Speed only (12 Mbps); HSMODE=0 in POWER register | POWER.HSENABLE (bit 5) must be set before SOFTCONN to enable HS chirp signaling during bus reset |
 | USB HS: H2D data phase ordering wrong | `sam_usb.c` | QGC "device not functioning" at HS; GET_LINE_CODING returns baud=8225/databits=7 (SETUP packet bytes leaked into linecoding struct); Windows CDC driver rejects device | Root cause: CLASS_SETUP called for SET_LINE_CODING BEFORE receiving the 7-byte OUT data phase. NuttX CDC immediately reads `dataout` (= ep0buf still containing SETUP bytes) into `priv->linecoding`. Fix: receive OUT data into ep0buf first, THEN call CLASS_SETUP with real data. |
 | USB HS: No DISCON handler | `sam_usb.c` | Board hangs completely on cable unplug — CPU stuck in ISR from PHY oscillation | INTRUSB.DISCON fires on cable removal; without handler, continuous interrupts flood NVIC. Fix: disable SOFTCONN, mask EPn interrupts, call CLASS_DISCONNECT. |
+| GPS UART baud rate never changed despite GPS_1_BAUD param | `sam_serial.c` | `gps status` shows `rate reading: 0 B/s`; setting `SER_GPS1_BAUD` or `GPS_1_BAUD` params had no effect | `sam_ioctl()` returned `-ENOTTY` for TCGETS/TCSETS → `tcsetattr()` always failed silently → SERCOM0 hardware stayed at `CONFIG_USART0_BAUD=9600` → GPS module at 115200 sent data that SERCOM0 decoded as garbage. Fix: (1) `CONFIG_USART0_BAUD=115200`; (2) added TCGETS/TCSETS to `sam_ioctl` using enable-protected BAUD register write (disable SERCOM → write BAUD → re-enable, each with SYNCBUSY poll). Verified 2026-09-08: status OK, 1594 B/s. |
 | SQI partial Page Program with AHB DMA contention | `sam_sqi.c` | `param save` silently fails after SDMMC0+DMA enabled — BWRITE verify shows `got=ff` from byte 71 onward, consistent across all retries | Root cause: `sam_sqi_flash_cmd_write` waited only for `PKTCOMP` before clearing `BDCON`. `PKTCOMP` fires when the BD DMA finishes **loading** bytes into the TX FIFO, NOT when they are shifted out. With AHB DMA contention (SDMMC0 ADMA2 + I2C/SPI system DMA), the TX FIFO only held ~70 bytes when PKTCOMP fired; `BDCON=0` terminated the SQI clock mid-page, committing only 70 bytes. TXBUFFREE showed 186 free slots confirming 186 bytes still in FIFO. Fix: after PKTCOMP, poll `STAT1.TXBUFFREE == 256` (full FIFO free = shift register also empty = last bit out) before clearing BDCON. Also fixed: SE command buffer was 256 bytes (an old pre-TXEMPTY artifact); the SST26 received 4 cmd + 252 garbage bytes. Fixed to 4 bytes. |
 
 ### I2C Driver — Production Rules for CA90 SERCOM
@@ -478,13 +648,16 @@ Three files that NuttX core includes everywhere — critical to get right:
 - SQI1 flash parameter storage production-ready: custom MTD ops (direct BD-DMA writes, XIP reads), D-cache invalidation before every read, mutex concurrency protection, read-back verification with 3 retries, erase spot-check. `param save` → reboot → `param show` verified on hardware ✓
 - `hardware/sam_sqi.h` added: SQI register definitions, BD descriptor struct, XIP base address, GCLK/MCLK IDs — all DFP-verified ✓
 - GCLK2 configured: PLL0/3 = 100 MHz → SQI1 core clock (`GCLK_PCHCTRL[57]`) ✓
-- SDMMC1 SD card logging: ADMA2 mode, 4-bit bus, GCLK4=100 MHz main + GCLK5=12 MHz slow, multi-block DMA up to 2.5 MB, 0 dropouts. Card detect on PC28 (GPIO active-LOW). Mount at `/fs/microsd` ✓
-- Pin-mux arbitration (SQI1 mux=7 ↔ SDMMC1 mux=8): SQI loads params at boot, then remuxes to SDMMC1 for logging ✓
+- SDMMC0 SD card logging: ADMA2 4-bit mode, GCLK4=100 MHz main (`GCLK_PCHCTRL[58]`) + GCLK5=12 MHz slow (`GCLK_PCHCTRL[59]`), multi-block DMA up to 2.5 MB, 0 dropouts. Pins PC08-PC15 func I (MUX=8). Card detect on PC15 (active-LOW). Mount at `/fs/microsd` ✓
+- No pin conflict with SQI1: SDMMC0 uses PC08-PC15; SQI1 uses PC30/PC31/PG00-03 (separate pins) ✓
 - SPI master (SERCOM3): `sam_spi.c` polled-mode driver, `hardware/sam_sercom_spi.h` DFP-verified, GCLK2=100 MHz, pins PC12/PC13/PC14/PC15 func C. PX4 bus table in `spi.cpp` ✓
 - I2C master (SERCOM5): `sam_i2c_master.c` interrupt-driven driver, `hardware/sam_sercom_i2c.h` DFP-verified, GCLK2=100 MHz, 400 kHz bus, pins PC25=SDA/PC26=SCL func D. PX4 bus table in `i2c.cpp` ✓
 - DSU DID read: enables APB clock (MCLK_ID=1), reads 0x44000120, extracts REVISION[31:28] → `ver all` shows real silicon rev ✓
 - Chip UID (FUSES_CALOTP UNIQID): reads factory-programmed 96-bit serial from 0x0A0071E0 → `ver all` shows unique PX4GUID per board ✓
 - EIC driver (`sam_eic.c`): 16-channel async-mode external interrupt controller; GCLK3 for debounce; `px4_arch_gpiosetevent()` wired via `pic32czca90_gpiosetevent.c`; builds and links but NOT hardware-tested (no active DRDY consumer) ✓
+- GPS UART (SERCOM0/ttyS1): TCGETS/TCSETS added to `sam_serial.c` `sam_ioctl()`; `CONFIG_USART0_BAUD=115200`; hardware-verified 2026-09-08: status OK, 1594 B/s, 9.94 Hz, u-blox UBX protocol ✓
+- Telemetry UART (SERCOM4/ttyS2): SiK radio MAVLink at 57600 baud, MAV_0_CONFIG=101 ✓
+- RC Input UART (SERCOM7/ttyS3): SBUS 100000 8E2, hardware RXINV in CTRLA (no external inverter needed), RC_PORT_CONFIG=300 ✓
 
 **Pending — by priority for a flying PX4 system:**
 
@@ -499,31 +672,29 @@ Three files that NuttX core includes everywhere — critical to get right:
 >
 > **DFP location:** `C:/Users/I74182/.mchp_packs/Microchip/PIC32CZ-CA90_DFP/1.7.168/CA90/include/`
 
-#### P1 — SD Card Logging — ADMA2 mode (flight logs → /fs/microsd) — DONE ✓
-> **Completed.** SDMMC1 ADMA2 mode working. Multi-block DMA up to 2.5 MB verified, 0 dropouts.
+#### P1 — SD Card Logging — ADMA2 4-bit mode (flight logs → /fs/microsd) — DONE ✓
+> **Completed.** SDMMC0 ADMA2 4-bit mode working. Multi-block DMA up to 2.5 MB verified, 0 dropouts.
 >
-> **Hardware:** SDMMC1 (not SDMMC0). Micro-SD socket wired to SDMMC1 pins
-> (PC30/CLK, PG03/CMD, PC31/DAT0, PG00/DAT1, PG01/DAT2, PG02/DAT3, PC28/CD).
->
-> **Pin sharing:** SDMMC1 and SQI1 share physical pins (mux=8 vs mux=7).
-> Pin-mux arbitration code exists; SQI loads params first, then remuxes to SDMMC1.
+> **Hardware:** SDMMC0 (base 0x458A0000). Micro-SD socket wired to SDMMC0 pins:
+> PC08=CLK, PC09=DAT0, PC10=DAT1, PC11=DAT2, PC12=DAT3, PC13=CMD, PC14=WP, PC15=CD.
+> All func I (MUX=8). No pin conflict with SQI1 (SQI1 uses PC30/PC31/PG00-03).
 >
 > **GCLK assignment:**
-> - SDMMC1 main clock: GCLK4 → 100 MHz (PLL0/3); `GCLK_PCHCTRL[60] = GEN(4)|CHEN`
-> - SDMMC1 slow clock: GCLK5 → 12 MHz (PLL0/25); `GCLK_PCHCTRL[61] = GEN(5)|CHEN`
+> - SDMMC0 main clock: GCLK4 → 100 MHz (PLL0/3); `GCLK_PCHCTRL[58] = GEN(4)|CHEN`
+> - SDMMC0 slow clock: GCLK5 → 12 MHz (PLL0/25); `GCLK_PCHCTRL[59] = GEN(5)|CHEN`
 >
-- `hardware/sam_sdmmc.h` — DFP-verified; SDMMC1 base `0x460A0000`, `GCLK_ID=60`, `GCLK_ID_SLOW=61`, `MCLK_ID_AHB=71`, `MCLK_ID_APB=72` ✓
-- `sam_sdmmc.c` — ADMA2 mode; NuttX SDIO lower-half ✓
-- Board init: card detect on PC28, `mmcsd_slotinitialize()`, mount at `/fs/microsd` ✓
+> **WARNING:** PC08-PC15 also map to SQI0 (func H = MUX=7). Never configure SQI0 — it conflicts with SDMMC0.
+>
+- `hardware/sam_sdmmc.h` — DFP-verified; SDMMC0 base `0x458A0000`, `GCLK_ID=58`, `GCLK_ID_SLOW=59`, `MCLK_ID_AHB=69`, `MCLK_ID_APB=70` ✓
+- `sam_sdmmc.c` — ADMA2 4-bit mode; NuttX SDIO lower-half ✓
+- Board init: card detect on PC15, `mmcsd_slotinitialize()`, mount at `/fs/microsd` ✓
 - **Win:** `ls /fs/microsd` succeeds; logger writes with 0 dropouts ✓
 
 #### P2 — SQI Flash Parameter Storage (params/caldata/dataman) — DONE ✓
 > **Completed 2026-05-13.** Params persist across reboot (hardware-verified).
 > See `docs/sqi_hardware_behavior.md` for full silicon quirk documentation.
 >
-> **CRITICAL: SQI1 and SDMMC1 share pins — mux=7 (SQI) vs mux=8 (SDMMC).**
-> Currently SQI1 owns the pins full-time. When SDMMC1 is added, pin mux
-> switching is required between SQI and SDMMC operations.
+> **No pin conflict:** SQI1 uses PC30/PC31/PG00-03 (func H = MUX=7). SDMMC0 uses PC08-PC15 (func I = MUX=8). Separate pins — no arbitration needed.
 >
 > **Architecture:** Custom MTD ops (qspi.c) bypass NuttX sst26.c entirely.
 > Reads via XIP (0x90000000) with D-cache invalidation. Writes/erases via
@@ -640,7 +811,19 @@ Three files that NuttX core includes everywhere — critical to get right:
 
 | Header needed              | DFP source                  | Blocks              |
 |----------------------------|-----------------------------|---------------------|
-| `hardware/sam_usbhs.h`     | `component/usbhs.h`        | USB HS driver (P8)  |
 | `hardware/sam_adc.h`       | `component/adc.h`           | ADC driver (P10)    |
 | `hardware/sam_mcan.h`      | `component/can.h`           | CAN-FD driver (P11) |
 | `hardware/sam_wdt.h`       | `component/wdt.h`           | Watchdog (P12)      |
+
+**rc.board_defaults temporary state — MUST RESTORE before production**
+
+Currently `rc.board_defaults` has a temporary RC test configuration:
+```
+param set MAV_0_CONFIG 0        ← WRONG: disables serial telemetry
+param set RC_PORT_CONFIG 101    ← WRONG: RC on SERCOM4 (telemetry port)
+```
+Restore to production values:
+```
+param set MAV_0_CONFIG 101      ← telemetry on SERCOM4/ttyS2 (SiK radio)
+param set RC_PORT_CONFIG 300    ← RC on SERCOM7/ttyS3 (SBUS, hardware RXINV)
+```
