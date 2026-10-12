@@ -56,6 +56,14 @@ px4_add_module(
 		usb_diag.c
 )
 
+# RXINV silicon bug verification — 'sbus_test'
+px4_add_module(
+	MODULE board_sbus_test
+	MAIN sbus_test
+	SRCS
+		sbus_test.c
+)
+
 
 if(CONFIG_PIC32CZCA90_SQI1)
 	# SQI flash write path test — 'sqi_test'

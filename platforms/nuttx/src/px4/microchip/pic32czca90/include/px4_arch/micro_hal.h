@@ -63,7 +63,15 @@ __BEGIN_DECLS
 #define PX4_CPU_UUID_WORD32_FORMAT_SIZE         (PX4_CPU_UUID_WORD32_LENGTH-1+(2*PX4_CPU_UUID_BYTE_LENGTH)+1)
 #define PX4_CPU_MFGUID_FORMAT_SIZE              ((2*PX4_CPU_MFGUID_BYTE_LENGTH)+1)
 
-#define px4_savepanic(fileno, context, length)  (0)
+#if defined(CONFIG_ARCH_HAVE_PROGMEM) && defined(CONFIG_BOARD_CRASHDUMP)
+#  define HAS_PROGMEM 1
+#  include <px4_platform/progmem_dump.h>
+#  define px4_savepanic(fileno, context, length) \
+          progmem_dump_savepanic(fileno, context, length)
+#  define PX4_HF_GETDESC_IOCTL      PROGMEM_DUMP_GETDESC_IOCTL
+#else
+#  define px4_savepanic(fileno, context, length)  (0)
+#endif
 
 /* Bus numbering: PX4 uses 1-based, NuttX uses 0-based */
 #define PX4_BUS_OFFSET       1

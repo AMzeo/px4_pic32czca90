@@ -487,6 +487,11 @@ When any clock frequency, GCLK source, SERCOM pin, or baud rate changes — upda
 | USB HS: No DISCON handler | `sam_usb.c` | Board hangs completely on cable unplug — CPU stuck in ISR from PHY oscillation | INTRUSB.DISCON fires on cable removal; without handler, continuous interrupts flood NVIC. Fix: disable SOFTCONN, mask EPn interrupts, call CLASS_DISCONNECT. |
 | GPS UART baud rate never changed despite GPS_1_BAUD param | `sam_serial.c` | `gps status` shows `rate reading: 0 B/s`; setting `SER_GPS1_BAUD` or `GPS_1_BAUD` params had no effect | `sam_ioctl()` returned `-ENOTTY` for TCGETS/TCSETS → `tcsetattr()` always failed silently → SERCOM0 hardware stayed at `CONFIG_USART0_BAUD=9600` → GPS module at 115200 sent data that SERCOM0 decoded as garbage. Fix: (1) `CONFIG_USART0_BAUD=115200`; (2) added TCGETS/TCSETS to `sam_ioctl` using enable-protected BAUD register write (disable SERCOM → write BAUD → re-enable, each with SYNCBUSY poll). Verified 2026-09-08: status OK, 1594 B/s. |
 | SQI partial Page Program with AHB DMA contention | `sam_sqi.c` | `param save` silently fails after SDMMC0+DMA enabled — BWRITE verify shows `got=ff` from byte 71 onward, consistent across all retries | Root cause: `sam_sqi_flash_cmd_write` waited only for `PKTCOMP` before clearing `BDCON`. `PKTCOMP` fires when the BD DMA finishes **loading** bytes into the TX FIFO, NOT when they are shifted out. With AHB DMA contention (SDMMC0 ADMA2 + I2C/SPI system DMA), the TX FIFO only held ~70 bytes when PKTCOMP fired; `BDCON=0` terminated the SQI clock mid-page, committing only 70 bytes. TXBUFFREE showed 186 free slots confirming 186 bytes still in FIFO. Fix: after PKTCOMP, poll `STAT1.TXBUFFREE == 256` (full FIFO free = shift register also empty = last bit out) before clearing BDCON. Also fixed: SE command buffer was 256 bytes (an old pre-TXEMPTY artifact); the SST26 received 4 cmd + 252 garbage bytes. Fixed to 4 bytes. |
+| PROGMEM `g_row_buf` alignment — FCW ROWP rounds SRCADDR down | `sam_progmem.c` | FCW ROWP rounds SRCADDR to the nearest 4-byte boundary. If `g_row_buf` is declared as `uint8_t g_row_buf[1024]` without alignment, GCC may place it at an odd address; ROWP then DMA-reads from the rounded-down address, writing wrong data into flash. | Added `__attribute__((aligned(4)))` to `g_row_buf`. FCW SRCADDR is now always 4-byte aligned. |
+| PROGMEM `up_progmem_write` required ROW_SIZE alignment | `sam_progmem.c` | `progmem_dump.c` calls `up_progmem_write` with offsets that are not a multiple of 1024 (e.g., `write_user_stack` seeks 1716 bytes into a 1024-byte file). Write starts mid-row; naive ROWP starting at the aligned row_base overwrites the already-written header. | Changed to sub-row read-modify-write: determine the 1024-byte row containing `addr`, load current flash content into `g_row_buf`, overlay only the changed bytes, then ROWP the full row. Handles any `addr`/`count` combination. |
+| PROGMEM NPAGES=2 truncates crash dump | `defconfig`, `board_config.h` | With NPAGES=2, the region is 8192 bytes. File layout: files 0-2 use 3×2048 = 6144 bytes; file 3 header at offset 6144 leaves only 2048 bytes for data. `write_user_stack` in `progmem_dump.c` writes `PROGMEM_DUMP_STACK_SIZE=3072` bytes, seeking to offset 1716 which is beyond the 1024-byte file 3 allocated data area. `up_progmem_write` returned -EFAULT; crash dump silently truncated. | Changed `CONFIG_PIC32CZCA90_PROGMEM_NPAGES=3` (12 KB region). File 3 now has 5120 bytes of data space, comfortably holding `fullcontext_s` (3072 bytes). |
+| ICM-45686 MISO bit-drop (0x9F→0x8F pattern) | `hardware/pic32czca90_pinmap.h` | Mikroe Click SDO pull-down fights MISO rising edge on jumper wires. At 1 MHz, first HIGH after a run of LOWs sampled as LOW → register reads corrupted (bad_register events); `sam_fifo_read` for WHO_AM_I returned wrong value intermittently. | Added `PORT_FLAG_PULLEN \| PORT_FLAG_OUTVAL_HIGH` to PORT_SERCOM8_PAD3 (PD27 MISO). CA90 internal pull-up counteracts Click pull-down → faster rising edge → clean sampling. bad_register: 0 verified. Also added `PORT_FLAG_DRVSTR` to PAD0/PAD1 (MOSI/SCK) for drive strength on jumper wire capacitance. |
+| SPI8 cap at 1 MHz caused FIFO overflow | `platforms/nuttx/NuttX/nuttx/arch/arm/src/pic32czca90/sam_spi.c` | 1 MHz SPI too slow to drain ICM FIFO at 800 Hz ODR → ~4 overflows/sec, each discarding accumulated samples. Harmless for arming but undesirable. | Raised cap to 2 MHz after MISO pull-up confirmed bad_register=0 at 2 MHz. FIFO overflow drops to near-zero (startup transient only). BAUD register: 24 (100 MHz / (2×25) = 2 MHz). |
 
 ### I2C Driver — Production Rules for CA90 SERCOM
 
@@ -650,19 +655,20 @@ Three files that NuttX core includes everywhere — critical to get right:
 - GCLK2 configured: PLL0/3 = 100 MHz → SQI1 core clock (`GCLK_PCHCTRL[57]`) ✓
 - SDMMC0 SD card logging: ADMA2 4-bit mode, GCLK4=100 MHz main (`GCLK_PCHCTRL[58]`) + GCLK5=12 MHz slow (`GCLK_PCHCTRL[59]`), multi-block DMA up to 2.5 MB, 0 dropouts. Pins PC08-PC15 func I (MUX=8). Card detect on PC15 (active-LOW). Mount at `/fs/microsd` ✓
 - No pin conflict with SQI1: SDMMC0 uses PC08-PC15; SQI1 uses PC30/PC31/PG00-03 (separate pins) ✓
-- SPI master (SERCOM3): `sam_spi.c` polled-mode driver, `hardware/sam_sercom_spi.h` DFP-verified, GCLK2=100 MHz, pins PC12/PC13/PC14/PC15 func C. PX4 bus table in `spi.cpp` ✓
+- SPI master (SERCOM8/SPI8): `sam_spi.c` polled+DMA driver, `hardware/sam_sercom_spi.h` DFP-verified, GCLK2=100 MHz, pins PD24(MOSI)/PD25(SCK)/PD26(CS)/PD27(MISO) func D. 2 MHz cap (eval board — Mikroe Click jumper wires). MISO pull-up (PORT_FLAG_PULLEN+OUTVAL_HIGH on PD27) counteracts Click SDO pull-down. PX4 bus table in `spi.cpp` ✓
 - I2C master (SERCOM5): `sam_i2c_master.c` interrupt-driven driver, `hardware/sam_sercom_i2c.h` DFP-verified, GCLK2=100 MHz, 400 kHz bus, pins PC25=SDA/PC26=SCL func D. PX4 bus table in `i2c.cpp` ✓
 - DSU DID read: enables APB clock (MCLK_ID=1), reads 0x44000120, extracts REVISION[31:28] → `ver all` shows real silicon rev ✓
 - Chip UID (FUSES_CALOTP UNIQID): reads factory-programmed 96-bit serial from 0x0A0071E0 → `ver all` shows unique PX4GUID per board ✓
 - EIC driver (`sam_eic.c`): 16-channel async-mode external interrupt controller; GCLK3 for debounce; `px4_arch_gpiosetevent()` wired via `pic32czca90_gpiosetevent.c`; builds and links but NOT hardware-tested (no active DRDY consumer) ✓
 - GPS UART (SERCOM0/ttyS1): TCGETS/TCSETS added to `sam_serial.c` `sam_ioctl()`; `CONFIG_USART0_BAUD=115200`; hardware-verified 2026-09-08: status OK, 1594 B/s, 9.94 Hz, u-blox UBX protocol ✓
 - Telemetry UART (SERCOM4/ttyS2): SiK radio MAVLink at 57600 baud, MAV_0_CONFIG=101 ✓
-- RC Input UART (SERCOM7/ttyS3): SBUS 100000 8E2, hardware RXINV in CTRLA (no external inverter needed), RC_PORT_CONFIG=300 ✓
+- RC Input UART (SERCOM7/ttyS3): SBUS 100000 8E2, RC_PORT_CONFIG=300 ✓
+  **SILICON BUG: USART_CTRLA_RXINV (bit 10) is R/W but has NO hardware effect on CA90. External NPN inverter is mandatory for inverted SBUS. PC22/PC21 pull-up (PORT_FLAG_PULLEN|OUTVAL_HIGH) required to prevent NPN collector float during idle.**
 
 **Pending — by priority for a flying PX4 system:**
 
 > **Storage (done):** SD card → flight logs (`/fs/microsd`). SQI1 → params/caldata/dataman.
-> **Sensors (verified on hardware):** ICM45686 (SPI3 DMA), BMI088 accel+gyro (I2C5 DMA), BMM150 mag (I2C5 DMA) — all 0 bad transfers.
+> **Sensors (verified on hardware):** ICM45686 (SPI8 DMA, SERCOM8), BMI088 accel+gyro (I2C5 DMA), BMM150 mag (I2C5 DMA) — all 0 bad transfers.
 >
 > **DFP peripheral names (CA90 — do not use SAMD5x names):**
 > - SD/MMC controller → `SDMMC` (`component/sdmmc.h`) — not "SDHC" or "HSMCI"
@@ -707,13 +713,13 @@ Three files that NuttX core includes everywhere — critical to get right:
 
 #### P3 — System DMA — DONE ✓
 > **Completed.** `sam_dmac.c` BD-based DMA driver. Used by I2C5 RX (1.6M+ transfers confirmed)
-> and SPI3 TX+RX dual-channel (ICM45686 FIFO bursts). NOINC flag for NULL-buffer handling.
+> and SPI8 TX+RX dual-channel (ICM45686 FIFO bursts). NOINC flag for NULL-buffer handling.
 > MPU nocache region at 0x200F0000 for BD structs.
 >
 - `hardware/sam_dma.h` — DFP-verified register defs, trigger IDs, BD descriptor struct ✓
 - `sam_dmac.c` — BD-based transfer engine, NuttX `sam_dmachannel`/`sam_dmastart`/`sam_dmastop` API ✓
 - I2C5: RX DMA for bulk sensor FIFO reads; `i2c_stats` shows `dma_s=1.6M, dma_d=1.6M` ✓
-- SPI3: TX+RX dual-channel DMA with NOINC for NULL buffers; `icm45686: bad transfer: 0` ✓
+- SPI8: TX+RX dual-channel DMA with NOINC for NULL buffers; `icm45686: bad transfer: 0` ✓
 
 #### P4 — EIC (External Interrupt Controller) — IMPLEMENTED, NOT HARDWARE-TESTED
 > **Implemented 2026-06-22.** Full EIC driver + PX4 gpiosetevent glue layer built and linked.
@@ -733,15 +739,18 @@ Three files that NuttX core includes everywhere — critical to get right:
 - `board_config.h` — `GPIO_IMU_DRDY` defined (PA08, func A, EXTINT[8]) but unused in bus table ✓
 - **NOT tested on hardware** — no sensor currently triggers EXTINT; will validate when a DRDY-dependent peripheral is added
 
-#### P5 — SPI Master → IMU (SERCOM3) — DONE ✓
-> **Completed.** SPI DMA driver on SERCOM3. GCLK2=100 MHz.
-> Pins: PC12=MOSI, PC13=SCK, PC14=CS (GPIO), PC15=MISO, function C.
-> ICM45686 running at full rate, 0 bad transfers, 0 FIFO overflows.
+#### P5 — SPI Master → IMU (SERCOM8) — DONE ✓
+> **Completed.** SPI polled+DMA driver on SERCOM8. GCLK2=100 MHz. 2 MHz cap (eval board).
+> Pins: PD24=MOSI(PAD0), PD25=SCK(PAD1), PD26=CS(GPIO), PD27=MISO(PAD3), function D.
+> MISO pull-up (PORT_FLAG_PULLEN+OUTVAL_HIGH) counteracts Mikroe Click SDO pull-down.
+> MOSI/SCK drive strength (PORT_FLAG_DRVSTR) for jumper wire capacitance.
+> ICM45686 running at 798.9 Hz, 0 bad transfers, 0 bad registers, FIFO overflow near-zero.
 >
 - `hardware/sam_sercom_spi.h` — DFP-verified register definitions ✓
 - `sam_spi.c` — NuttX `spi_dev_s` with TX+RX DMA (polled fallback for ≤4 bytes) ✓
-- `spi.cpp` — PX4 board SPI bus table and chip-select functions ✓
-- **Win:** `icm45686: bad transfer: 0` over 307k+ rate control cycles ✓
+- `spi.cpp` — PX4 board SPI bus table, chip-select functions, ICM warm-up ✓
+- `init.c` — T0 block: clock-free CS LOW + polling WHO_AM_I loop at boot ✓
+- **Win:** `icm45686: bad transfer: 0, bad register: 0` at 798.9 Hz ✓
 
 #### P6 — I2C Master → Magnetometer + Barometer (SERCOM5) — DONE ✓
 > **Completed.** Interrupt-driven I2C master with RX DMA on SERCOM5. GCLK2=100 MHz, 400 kHz bus.
@@ -788,12 +797,19 @@ Three files that NuttX core includes everywhere — critical to get right:
 - defconfig: `CONFIG_USBDEV=y`, `CONFIG_USBDEV_DUALSPEED=y`, `CONFIG_CDCACM=y` ✓
 - **Win:** QGC connects at 480 Mbps HS; `mavlink status` shows txerr=0, GCS heartbeat valid ✓
 
-#### P9 — PROGMEM Crash Log (crash survives reboot)
-- `sam_progmem.c` — `up_progmem_*` API using `hardware/sam_fcw.h` (already exists)
-- `NSECTORS=2` → last 8 KB of PFM reserved at runtime; no linker change needed
-- defconfig: `CONFIG_PIC32CZCA90_PROGMEM=y`, `CONFIG_MTD_PROGMEM=y`, `CONFIG_BOARD_CRASHDUMP=y`
-- Board config: `HAS_PROGMEM`; board init: `board_hardfault_init(2, true)`
-- **Win:** deliberate PANIC(); reboot; crash dump visible on console
+#### P9 — PROGMEM Crash Log (crash survives reboot) — DONE ✓
+> **Completed 2026-09-09.** Full CPU context dump (R0-R15, PC, LR, SP, xPSR, CFSR, HFSR,
+> task name, git hash, interrupt + user stacks with 0xdeadbeef canaries) saved to last 3 PFM
+> pages (12 KB) on fault, displayed on next boot. `rcS` auto-commits to `/fs/microsd/fault_N.txt`
+> when SD is available. Three bugs fixed: `g_row_buf` alignment, sub-row RMW for non-aligned
+> writes, NPAGES=2→3 to fit `fullcontext_s` (3072 bytes). See Key Bug History.
+>
+- `sam_progmem.c` — `up_progmem_*` API using `hardware/sam_fcw.h` ✓
+- `CONFIG_PIC32CZCA90_PROGMEM_NPAGES=3` → last 12 KB of PFM reserved; 5120 bytes for crash data ✓
+- defconfig: `CONFIG_PIC32CZCA90_PROGMEM=y`, `CONFIG_MTD_PROGMEM=y`, `CONFIG_BOARD_CRASHDUMP=y` ✓
+- Board config: `HAS_PROGMEM`; board init: `board_hardfault_init(2, true)` ✓
+- `rcS` auto-commits crash dump to `/fs/microsd/fault_N.txt` when SD is mounted ✓
+- **Win:** deliberate NULL deref → fault → reboot → full register dump on console ✓
 
 #### P10 — ADC / Battery Monitoring
 - `hardware/sam_adc.h` from DFP `component/adc.h`; ADC0 `GCLK_ID=41`, `MCLK_ID_APB=51`
@@ -803,68 +819,20 @@ Three files that NuttX core includes everywhere — critical to get right:
 - `hardware/sam_mcan.h` from DFP `component/can.h`; `sam_mcan.c`
 - CAN3 (J701) `GCLK_CH=48`, CAN4 (J702) `GCLK_CH=49`; ATA6561 transceivers on-board
 
-#### P12 — Watchdog (WDT) — NEXT TO IMPLEMENT
-
-**DFP-verified register facts (do not re-derive):**
-- Base: `0x44070000`
-- MCLK_ID_APB: `14` → `SAM_MCLK_CLKMSK_ADDR(14)` / `SAM_MCLK_CLKMSK_BIT(14)` (same pattern as EIC/TCC)
-- No GCLK needed — WDT uses OSCULP32K always-on directly (GCLK3 feeds optional debounce only)
-- IRQ: `SAM_IRQ_WDT = SAM_IRQ_EXTINT + 14` (already in pic32czca90_irq.h ✓)
-- Clock: OSCULP32K (~32 kHz) / 32 internal prescaler = **1024 Hz** counter
-- Timeout: `WDT_CONFIG.PER = CYC4096 (0x9)` = 4096/1024 = **4 seconds**
-- Early warning: `WDT_EWCTRL.EWOFFSET = CYC2048 (0x8)` → EW fires at 4s−2s = **2 seconds**
-- Clear key: write `0xA5` to `WDT_CLEAR` (offset 0x0C); poll `WDT_SYNCBUSY.CLEAR` after
-- SYNCBUSY must be polled after writing CTRLA.ENABLE and CTRLA.ALWAYSON
-- Reset value of CONFIG is 0xBB (PER=0xB=CYC16384, WINDOW=0xB) — must overwrite PER before enabling
-
-**Files to create (NuttX submodule):**
-
-1. `platforms/nuttx/NuttX/nuttx/arch/arm/src/pic32czca90/hardware/sam_wdt.h`
-   - Copy DFP bit definitions from `C:/Users/I74182/.mchp_packs/Microchip/PIC32CZ-CA90_DFP/1.7.168/CA90/include/component/wdt.h`
-   - Add: `#define SAM_WDT_BASE  0x44070000UL`
-   - Add: `#define MCLK_ID_APB_WDT  14u`
-   - Add offset macros: `SAM_WDT_CTRLA`, `SAM_WDT_CONFIG`, `SAM_WDT_EWCTRL`, `SAM_WDT_INTENCLR`, `SAM_WDT_INTENSET`, `SAM_WDT_INTFLAG`, `SAM_WDT_SYNCBUSY`, `SAM_WDT_CLEAR`
-
-2. `platforms/nuttx/NuttX/nuttx/arch/arm/src/pic32czca90/sam_wdt.c`
-   - Reference: `platforms/nuttx/NuttX/nuttx/arch/arm/src/samv7/sam_wdt.c` (structure only — registers completely different)
-   - `sam_wdt_initialize()`:
-     1. Enable APB clock: `SAM_MCLK_CLKMSK_ADDR(14)` |= `SAM_MCLK_CLKMSK_BIT(14)`
-     2. Write CONFIG: PER=CYC4096, WINDOW=0 (normal mode)
-     3. Write EWCTRL: EWOFFSET=CYC2048
-     4. Write CTRLA: ENABLE=1; poll SYNCBUSY.ENABLE
-     5. Attach EW ISR to `SAM_IRQ_WDT`; enable INTENSET.EW
-   - `sam_wdt_pet()` (called from work queue every ~1 s):
-     1. Write `0xA5` to WDT_CLEAR; poll `SYNCBUSY.CLEAR`
-   - EW ISR: print `_alert("WDT: early warning\n")` — signals system may be stuck
-
-3. `platforms/nuttx/NuttX/nuttx/arch/arm/src/pic32czca90/sam_wdt.h` — public header for `sam_wdt_initialize()`, `sam_wdt_pet()`
-
-**Files to modify:**
-
-4. `platforms/nuttx/NuttX/nuttx/arch/arm/src/pic32czca90/Make.defs`
-   - Add `sam_wdt.c` under `CONFIG_PIC32CZCA90_WDT`
-
-5. `platforms/nuttx/NuttX/nuttx/arch/arm/src/pic32czca90/Kconfig`
-   - Add `config PIC32CZCA90_WDT` boolean
-
-6. `boards/microchip/czca90curiosity/nuttx-config/nsh/defconfig`
-   - Add `CONFIG_PIC32CZCA90_WDT=y`
-   - Add `CONFIG_WATCHDOG=y` (NuttX watchdog subsystem)
-
-7. `boards/microchip/czca90curiosity/default.px4board`
-   - Add `CONFIG_DRIVERS_WATCHDOG=y`
-
-8. `boards/microchip/czca90curiosity/src/init.c`
-   - Call `sam_wdt_initialize()` in `board_app_initialize()`
-   - Schedule `sam_wdt_pet()` via `work_queue(LPWORK, ...)` every 1000 ms
-
-**Test procedure:**
-1. Flash; verify LED1 still blinks (WDT being kicked) — boot success
-2. NSH: `hrt_test` or any command — system still responsive = WDT not firing prematurely
-3. Deliberate stall test: add a temporary `up_udelay(5000000)` (5s) in init.c after WDT enable → should reboot in ~4s with `_alert("WDT: early warning")` printed at 2s mark
-4. Remove stall; rebuild; verify normal operation
-
-**Do NOT use ALWAYSON** — with ALWAYSON set, the WDT cannot be disabled by debugger and locks out MPLAB programming. Use ENABLE only.
+#### P12 — Watchdog (WDT) — DONE ✓
+> **Completed.** 4-second timeout (OSCULP32K, CYC4096), 2-second early warning ISR, kicked every 1s
+> via `wdt_pet_task` kthread in `init.c`. ALWAYSON NOT set (keeps MPLAB programming safe).
+> Hardware-verified: LED1 blinks continuously = WDT being kicked; deliberate stall test confirmed
+> reboot at ~4s with early warning at 2s.
+>
+> **DFP register facts:** Base=0x44070000, MCLK_ID_APB=14, no GCLK (OSCULP32K always-on),
+> IRQ=SAM_IRQ_EXTINT+14, clear key=0xA5 to WDT_CLEAR, SYNCBUSY after ENABLE write.
+>
+- `hardware/sam_wdt.h` — DFP-verified register definitions ✓
+- `sam_wdt.c` + `sam_wdt.h` — driver: APB clock enable, CONFIG/EWCTRL write, ENABLE+SYNCBUSY, EW ISR ✓
+- defconfig: `CONFIG_PIC32CZCA90_WDT=y`, `CONFIG_WATCHDOG=y` ✓
+- init.c: `sam_wdt_initialize()` + `wdt_pet_task` kthread every 1s ✓
+- **Win:** system reboots in ~4s when stalled; `_alert("WDT: early warning")` printed at 2s ✓
 
 - ~~DSU: un-stub `board_mcu_version()` / `board_get_uuid32()`~~ — **DONE ✓** (DID at 0x44000120, UID at 0x0A0071E0)
 
@@ -874,13 +842,12 @@ Three files that NuttX core includes everywhere — critical to get right:
 |----------------------------|-----------------------------|---------------------|
 | `hardware/sam_adc.h`       | `component/adc.h`           | ADC driver (P10)    |
 | `hardware/sam_mcan.h`      | `component/can.h`           | CAN-FD driver (P11) |
-| `hardware/sam_wdt.h`       | `component/wdt.h`           | Watchdog (P12) — see above |
 
 **rc.board_defaults — production state (restored 2026-09-08)**
 
 MAV_0_CONFIG=0, RC_PORT_CONFIG=101 — Curiosity board config:
 - SERCOM7 (PD14/PD15) NOT exposed on Curiosity; RC SBUS uses SERCOM4 (PC21/PC22, EXT2 13/14).
-- board.h BOARD_SERCOM4_MUXCONFIG has USART_CTRLA_RXINV; defconfig USART4=100000/8E2.
+- board.h BOARD_SERCOM4_MUXCONFIG has RXINV=0 (RXINV silicon no-op); external NPN inverter + PC22 pull-up required; defconfig USART4=100000/8E2.
 - MAV_0_CONFIG=0: no serial radio needed — USB HS (J102) provides full GCS link at 480 Mbps.
 - GPS on SERCOM0 (PC00/PC01) confirmed accessible on Curiosity EXT header.
 Full flight-ready param set: EKF2 (GPS ctrl=7), PWM limits, RC mapping, PID tuning,

@@ -52,6 +52,17 @@
 #  include "sam_eic.h"
 #endif
 
+#ifdef CONFIG_PIC32CZCA90_WDT
+#  include "sam_wdt.h"
+#  include <nuttx/timers/watchdog.h>
+#  include <fcntl.h>
+#  include <sys/ioctl.h>
+#endif
+
+#ifdef CONFIG_PIC32CZCA90_PROGMEM
+#  include "sam_progmem.h"
+#endif
+
 #include "hardware/sam_tcc.h"
 #include "hardware/sam_gclk.h"
 #include "hardware/sam_mclk.h"
@@ -59,6 +70,7 @@
 
 #ifdef CONFIG_PIC32CZCA90_SERCOM8_ISSPI
 #  include "sam_spi.h"
+#  include <nuttx/spi/spi.h>
 #endif
 
 #ifdef CONFIG_PIC32CZCA90_SERCOM5_ISI2C
@@ -143,6 +155,28 @@ static int heartbeat_task(int argc, char *argv[])
 	return 0;
 }
 
+#ifdef CONFIG_PIC32CZCA90_WDT
+static int wdt_pet_task(int argc, char *argv[])
+{
+	int fd = open(CONFIG_WATCHDOG_DEVPATH, O_RDONLY);
+
+	if (fd < 0) {
+		_alert("WDT: failed to open %s: %d\n", CONFIG_WATCHDOG_DEVPATH, errno);
+		return -errno;
+	}
+
+	ioctl(fd, WDIOC_START, 0);
+
+	for (; ;) {
+		ioctl(fd, WDIOC_KEEPALIVE, 0);
+		usleep(1000000);
+	}
+
+	close(fd);
+	return 0;
+}
+#endif
+
 /************************************************************************************
  * Name: arm_addregion
  *
@@ -203,9 +237,17 @@ sam_board_initialize(void)
 	board_autoled_initialize();
 	led_init();
 
-	/* Configure GPIO pins */
+	/* Configure GPIO pins — GPIO_SPI8_CS_IMU (PD26) starts LOW here */
 	const uint32_t gpio[] = PX4_GPIO_INIT_LIST;
 	px4_gpio_init(gpio, arraySize(gpio));
+
+	/* ICM-45686 SPI mode selection: chip commits to SPI mode when CS is LOW
+	 * during its power-on reset (POR) window (~1-11ms after VDD).  CS just
+	 * went LOW via px4_gpio_init above.  Hold LOW for 15ms to cover the POR
+	 * window, then drive HIGH so the first driver transaction gets a clean
+	 * CS HIGH→LOW edge. */
+	up_udelay(15000);
+	sam_portwrite(GPIO_SPI8_CS_IMU, true);  /* CS HIGH — SPI mode locked in */
 }
 
 /****************************************************************************
@@ -222,11 +264,24 @@ __EXPORT int board_app_initialize(uintptr_t arg)
 	/* Initialize HRT (TCC0, 150 MHz free-running + CC[0] compare ISR) */
 	hrt_init();
 
+#if defined(CONFIG_PIC32CZCA90_PROGMEM) && defined(CONFIG_BOARD_CRASHDUMP)
+	sam_progmem_initialize();
+	if (board_hardfault_init(2, true) != 0) {
+		led_on(LED_RED);
+	}
+#endif
+
 	/* Initialize TCC1 for PWM — must be early (same context as HRT/TCC0) */
 	board_tcc1_early_init();
 
 #ifdef CONFIG_PIC32CZCA90_EIC
 	sam_eic_initialize();
+#endif
+
+#ifdef CONFIG_PIC32CZCA90_WDT
+	sam_wdt_initialize();
+	kthread_create("wdt_pet", SCHED_PRIORITY_MAX - 10, 1024,
+		       wdt_pet_task, NULL);
 #endif
 
 	/* LED0 solid ON = NuttX booted; LED1 blinks at 1 Hz via heartbeat */
@@ -259,6 +314,9 @@ __EXPORT int board_app_initialize(uintptr_t arg)
 
 #ifdef CONFIG_PIC32CZCA90_SDMMC0
 	{
+#if !SDMMC_TEST_USE_SDMMC1
+		/* SDMMC0 EXT-connector pins — skip when redirected to SDMMC1 onboard
+		 * socket; sam_sdmmc_initialize() muxes PC30/PG00-03 internally. */
 		sam_portconfig(PORT_SDMMC0_CLK);
 		sam_portconfig(PORT_SDMMC0_CMD);
 		sam_portconfig(PORT_SDMMC0_DAT0);
@@ -275,15 +333,13 @@ __EXPORT int board_app_initialize(uintptr_t arg)
 		 * explicit GPIO-HIGH here since it's unused in 1-bit mode. */
 		sam_portconfig(PORT_PORTC | PORT_PIN(12) |
 			       PORT_FLAG_OUTPUT | PORT_FLAG_OUTVAL_HIGH);
-		syslog(LOG_INFO, "[boot] DAT3/CS PC12 driven HIGH (1-bit mode)\n");
 #  endif
 		sam_portconfig(PORT_SDMMC0_CD);
+#endif /* !SDMMC_TEST_USE_SDMMC1 */
 
-		int ret = sam_sdmmc0_slotinitialize(0);
+		int ret = sam_sdmmc_slotinitialize(0);
 		if (ret < 0) {
-			syslog(LOG_ERR, "[boot] sam_sdmmc0_slotinitialize: %d\n", ret);
-		} else {
-			syslog(LOG_INFO, "[boot] SDMMC0 ready\n");
+			syslog(LOG_ERR, "[boot] sam_sdmmc_slotinitialize: %d\n", ret);
 		}
 	}
 #endif /* CONFIG_PIC32CZCA90_SDMMC0 */
@@ -294,7 +350,45 @@ __EXPORT int board_app_initialize(uintptr_t arg)
 		if (!spi8) {
 			syslog(LOG_ERR, "[boot] SPI8 init failed\n");
 		} else {
-			syslog(LOG_INFO, "[boot] SPI8 (SERCOM8) ready\n");
+			/* ICM-45686 SPI wake-up.
+			 *
+			 * The chip powers on in I2C mode (CS HIGH during POR — BootROM runs
+			 * before board code runs).  A clocked CS-LOW transaction (T0) switches
+			 * it from I2C to SPI mode, which triggers an internal chip reset.
+			 * Send dummy T0 transactions every 50ms for 500ms to keep the device
+			 * in SPI mode until the driver probes it (spi.cpp waits 200ms post-T0).
+			 * devid=0 hits the board fallback which drives GPIO_SPI8_CS_IMU. */
+			const uint8_t icm_wake_tx[2] = {0xAA, 0x55};
+			uint8_t icm_wake_rx[2];
+
+			/* Clock-free CS LOW for 2ms — forces ICM-45686 SPI mode (re)selection.
+			 * The BootROM runs for several ms with CS floating HIGH (reset-state
+			 * input), which can close the ICM POR window before sam_board_initialize
+			 * drives CS LOW.  This pulse recovers the ICM from I2C mode at any
+			 * point after boot, matching what spi_test does before every WHO_AM_I. */
+			px4_arch_gpiowrite(GPIO_SPI8_CS_IMU, false);
+			up_udelay(2000);   /* 2ms clock-free CS LOW — ICM SPI mode selection */
+			px4_arch_gpiowrite(GPIO_SPI8_CS_IMU, true);
+			up_udelay(100000); /* 100ms settling — ICM needs time to complete internal
+			                    * SPI interface reset after mode-select pulse;
+			                    * spi_test's printf calls provide this implicitly */
+
+			SPI_LOCK(spi8, true);
+
+			/* T0: mode-switch transaction (CS low pulse → device exits I2C mode) */
+			SPI_SELECT(spi8, 0, true);
+			SPI_EXCHANGE(spi8, icm_wake_tx, icm_wake_rx, 2);
+			SPI_SELECT(spi8, 0, false);
+
+			/* Keep-alive: T0 every 50ms for 500ms so ICM stays in SPI mode. */
+			for (int i = 0; i < 10; i++) {
+				up_udelay(50000);
+				SPI_SELECT(spi8, 0, true);
+				SPI_EXCHANGE(spi8, icm_wake_tx, icm_wake_rx, 2);
+				SPI_SELECT(spi8, 0, false);
+			}
+
+			SPI_LOCK(spi8, false);
 		}
 	}
 #endif
@@ -308,8 +402,6 @@ __EXPORT int board_app_initialize(uintptr_t arg)
 			int ret = i2c_register(i2c5, 5);
 			if (ret < 0) {
 				syslog(LOG_ERR, "[boot] i2c_register(5): %d\n", ret);
-			} else {
-				syslog(LOG_INFO, "[boot] I2C5 (SERCOM5) ready\n");
 			}
 		}
 	}

@@ -79,12 +79,15 @@
  * CS is GPIO-controlled (not hardware SS).
  * DOPO=0: MOSI=PAD0(PD24), SCK=PAD1(PD25)
  * DIPO=3: MISO=PAD3(PD27)
- * CS: PD26 (GPIO output, active LOW, initial HIGH) */
+ * CS: PD26 (GPIO output, active LOW, initial LOW for ICM-45686 SPI mode selection) */
 
 #define PX4_SPI_BUS_SENSORS         8
 
+/* CS starts LOW so the ICM-45686 sees CS asserted during its POR window.
+ * sam_board_initialize() holds it LOW for 15ms then drives HIGH.
+ * If CS is HIGH during POR the chip enters I2C mode (SDO=AD0=0V, all reads = 0x00). */
 #define GPIO_SPI8_CS_IMU \
-    (PORT_PORTD | PORT_PIN(26) | PORT_FLAG_OUTPUT | PORT_FLAG_OUTVAL_HIGH)
+    (PORT_PORTD | PORT_PIN(26) | PORT_FLAG_OUTPUT)
 
 #define PX4_SPIDEV_ICM_42688P       PX4_MK_SPI_SEL(PX4_SPI_BUS_SENSORS, 0)
 
@@ -119,9 +122,30 @@
 		GPIO_SPI8_CS_IMU, \
 	}
 
-/* Hardfault log path */
-#define HARDFAULT_ULOG_PATH "/fs/microsd"
-#define HARDFAULT_MAX_ULOG_FILE_LEN 80
+/* Hardfault log path.
+ * When HAS_PROGMEM is active, hardfault_log.h redefines these via PROGMEM_PATH.
+ * Only define here for the non-progmem case. */
+#if !defined(CONFIG_ARCH_HAVE_PROGMEM) || !defined(CONFIG_BOARD_CRASHDUMP)
+#  define HARDFAULT_ULOG_PATH "/fs/microsd"
+#  define HARDFAULT_MAX_ULOG_FILE_LEN 80
+#endif
+
+/* PROGMEM crash-log partition — last 3 pages (12 KB) of PFM.
+ * FCW write unit = 1024 bytes (ROW_SIZE); header padded to exactly that.
+ * Guard uses raw Kconfig symbols (visible before HAS_PROGMEM is defined). */
+#if defined(CONFIG_ARCH_HAVE_PROGMEM) && defined(CONFIG_BOARD_CRASHDUMP)
+#  define SAVE_CRASHDUMP            1
+#  define PROGMEM_DUMP_BASE         (0x0C800000ul - 3u * 4096u)  /* 0x0C7FD000 */
+#  define PROGMEM_DUMP_SIZE         (3u * 4096u)                 /* 12288 bytes total */
+#  define PROGMEM_DUMP_ALIGNMENT    1024u                        /* FCW ROW_SIZE */
+#  define PROGMEM_DUMP_HEADER_PAD   1004u                        /* 1024 - 20 fixed bytes */
+#  define PROGMEM_DUMP_ERASE_VALUE  0xFFu
+/* Available for crash dump data (file 3):
+ * 12288 total - 6144 (files 0-2 alloc) - 1024 header = 5120 bytes >= fullcontext_s (3072) */
+#  define PROGMEM_DUMP_STACK_SIZE   3072u
+/* hardfault_log.h defines PROGMEM_PATH "/mnt/hardfault"; fileno 0 = reboot counter */
+#  define HARDFAULT_REBOOT_PATH     "/mnt/hardfault0"
+#endif
 
 /* Console buffer — DISABLED.
  * PX4's ConsoleBuffer (platforms/common/px4_platform/console_buffer.cpp)

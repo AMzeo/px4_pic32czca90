@@ -18,7 +18,7 @@ This branch ports PX4 Autopilot to the **Microchip PIC32CZ CA90 Curiosity Ultra*
 | SQI param storage | ✅ Working | SST26VF032BAT on SQI1 — BD-DMA, XIP reads, D-cache safe |
 | SD card logging | ✅ Working | SDMMC0 ADMA2 4-bit mode; 0 dropouts; /fs/microsd |
 | System DMA | ✅ Working | BD-based DMA; SPI + I2C offload |
-| SPI / IMU | ✅ Working | SERCOM3 + DMA, ICM45686 @ 800 Hz, 0 bad transfers |
+| SPI / IMU | ✅ Working | SERCOM8 + DMA, ICM45686 @ 800 Hz, 0 bad transfers, 0 bad registers |
 | I2C / mag+accel | ✅ Working | SERCOM5 + DMA RX, BMI088 + BMM150, 1.6M+ completions |
 | EIC (ext. interrupts) | ✅ Built | 16-channel async EIC + gpiosetevent; no active consumer yet |
 | PWM outputs | ✅ Working | TCC1 (PB10/PB11) + TCC7 (PA22/PA23) = 4ch @ 400 Hz |
@@ -27,9 +27,9 @@ This branch ports PX4 Autopilot to the **Microchip PIC32CZ CA90 Curiosity Ultra*
 | GPS (SERCOM0) | ✅ Working | /dev/ttyS1, u-blox UBX, 115200 baud, 1594 B/s, 9.94 Hz |
 | Telemetry (SERCOM4) | ✅ Working | /dev/ttyS2, SiK radio MAVLink, 57600 baud |
 | RC Input (SERCOM7) | ✅ Working | /dev/ttyS3, SBUS 100000 8E2, hardware RXINV in CTRLA |
+| Watchdog (WDT) | ✅ Working | 4 s timeout, 2 s early warning ISR, kthread pet every 1 s |
+| PROGMEM crash log | ✅ Working | Full CPU context to last 12 KB PFM; auto-commit to SD on next boot |
 | ADC / Battery | 🔲 Pending | Needed for arming checks |
-| Watchdog | 🔲 Pending | WDT driver needed |
-| PROGMEM crash log | 🔲 Pending | Crash dump across reboot |
 | CAN-FD (MCAN) | 🔲 Pending | MCAN3/MCAN4 with ATA6561 transceivers on-board |
 | Ethernet (GMAC) | 🔲 Pending | For custom production board |
 
@@ -56,7 +56,7 @@ This branch ports PX4 Autopilot to the **Microchip PIC32CZ CA90 Curiosity Ultra*
 | Interface | Instance | Pins | Connector | Function |
 |-----------|----------|------|-----------|----------|
 | GPS TX/RX | SERCOM0 | PC00/PC01 | EXT header | u-blox GPS, 115200 baud |
-| SPI MOSI/MISO/SCK/CS | SERCOM3 | PC12/PC15/PC13/PC14 | EXT2 pins 16/17/18/15 | ICM45686 (6DOF IMU) |
+| SPI MOSI/SCK/CS/MISO | SERCOM8 | PD24/PD25/PD26/PD27 | Mikroe Click EXT header | ICM45686 (6DOF IMU), 2 MHz, MISO pull-up |
 | I2C SDA/SCL | SERCOM5 | PC25/PC26 | EXT2 pins 11/12 | BMI088 + BMM150 |
 | Telemetry TX/RX | SERCOM4 | PC21/PC22 | EXT2 pins 13/14 | SiK radio MAVLink |
 | RC Input (SBUS) | SERCOM7 | PD14/PD15 | EXT header | SBUS, hardware RXINV |
@@ -120,10 +120,8 @@ The NuttX fork contains the full PIC32CZ CA90 chip support: clock, GPIO, SERCOM 
 Priority order for reaching first flight:
 
 1. **ADC / Battery monitoring** — required for arming (P10)
-2. **Watchdog (WDT)** — 4 s timeout safety (P12)
-3. **PROGMEM crash log** — crash dump survives reboot (P9)
-4. **CAN-FD (MCAN)** — DroneCAN ESC/GPS telemetry (P11)
-5. **Ethernet (GMAC)** — GCS UDP link on custom board
+2. **CAN-FD (MCAN)** — DroneCAN ESC/GPS telemetry (P11)
+3. **Ethernet (GMAC)** — GCS UDP link on custom board
 
 ## Comparison to CA70 Port
 
@@ -139,7 +137,8 @@ Priority order for reaching first flight:
 | Mag (BMM150) | Working | Working ✅ |
 | PWM outputs | Working | Working ✅ (4ch TCC1+TCC7) |
 | ADC / Battery | Working | 🔲 Pending |
-| Watchdog | Working | 🔲 Pending |
+| Watchdog | Working | Working ✅ |
+| PROGMEM crash log | N/A | Working ✅ |
 | CAN-FD | Not started | 🔲 Pending (CA90 has 6× MCAN) |
 | Ethernet | N/A | 🔲 Pending (CA90 has GMAC) |
 

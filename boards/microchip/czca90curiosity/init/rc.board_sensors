@@ -3,15 +3,28 @@
 # PIC32CZ CA90 Curiosity Ultra - sensor drivers
 #
 # SPI bus 8: ICM-45686 (primary IMU) on SERCOM8 (PD24-27, J401)
-# I2C bus 5: 13DOF Click (MIKROE-2817) — BMI088 + BMM150 + BME680
-#   BMI088 accel 0x18, gyro 0x68, BMM150 mag 0x10, BME680 0x76 (no driver)
+# I2C bus 5: 13DOF Click (MIKROE-2817) — BMI088 accel 0x18, gyro 0x68, BMM150 mag 0x10
+#            Pressure 5 Click (MIKROE-4658) — BMP388 baro 0x76
 #
 
-# Primary IMU — 6DOF IMU 27 Click (ICM-45686, MIKROE-6514) on SPI bus 8
-icm45686 -s -b 8 start
+# I2C sensors first — trim/init reads happen before any SPI DMA traffic.
+# ICM DMA bursts (512B at 800Hz) cause AHB bus contention that corrupts I2C
+# trim reads → "failed to validate trim param" → no instance started.
+
+# Barometer — Pressure 5 Click (BMP388) on I2C bus 5, addr 0x76 (SDO=GND)
+bmp388 -X -b 5 -a 0x76 -f 100000 start
 
 # Magnetometer — Geomagnetic Click (BMM150) on I2C bus 5
 bmm150 -X -b 5 start
 
-# Barometer — Pressure 5 Click (BMP388) on I2C bus 5, addr 0x76 (SDO=GND)
-bmp388 -X -b 5 -a 0x76 -f 400000 start
+sleep 1
+
+# Primary IMU — 6DOF IMU 26 Click (ICM-45686, MIKROE-6514) on SPI bus 8
+# SERCOM8 Mode 3 returns random MISO data on this hardware; -m 0 (Mode 0)
+# works correctly and is supported by the ICM-45686 (INTF_CONFIG0.AP_SPI_MODE=0).
+# Started last so its DMA bursts don't interfere with I2C sensor init.
+if ! icm45686 -s -b 8 -m 0 start
+then
+    sleep 1
+    icm45686 -s -b 8 -m 0 start
+fi

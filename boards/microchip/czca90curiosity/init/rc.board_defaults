@@ -1,12 +1,15 @@
 #!/bin/sh
 # PIC32CZ CA90 Curiosity Ultra board defaults
 
-# Storage: SQI1 flash = params/caldata/dataman (/fs/mtd_params)
-#          SDMMC0 = flight logs (/fs/microsd)
+# Storage (SDMMC1 test config): SD card = params + flight logs (/fs/microsd)
+#          SQI1 disabled — shares PC30/PG00-03 pins with SDMMC1 onboard socket.
+#          Revert comment + dataman/param paths when SQI1 re-enabled on production PCB.
 
 if [ -d "/fs/microsd" ]
 then
 	echo "INFO [init] SD card mounted at /fs/microsd"
+	param select /fs/microsd/parameters
+	param import
 else
 	echo "WARN [init] SD card NOT mounted - /fs/microsd missing"
 fi
@@ -181,9 +184,8 @@ param set HIL_ACT_FUNC2 102
 param set HIL_ACT_FUNC3 103
 param set HIL_ACT_FUNC4 104
 
-# ── Dataman — waypoint storage on SQI flash ───
-dataman start -f /fs/mtd_waypoints
+# ── Dataman — waypoint storage on SD card (SQI1 disabled) ───
+dataman start -f /fs/microsd/dataman
 
-# Flush all param changes to SQI synchronously before serial_configure runs.
-# Prevents background autosave racing with dataman's SQI access (both share g_sqimutex).
+# Flush param changes to SD card.
 param save
